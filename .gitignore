@@ -1,0 +1,33 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Archivos de credenciales y secretos (Protección de claves de API)
+.env
+client_secret*.json
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Archivos de trabajo temporales y clips intermedios
+assets/temp/
+*.mp3
+*.jpg
+*.jpeg
+*.png
+!screenshots/*.png
+!assets/images/*.png
+
+# Salidas de video finales y logs
+output/*.mp4
+output/*.mkv
+logs/
+*.log
+
+# Backups locales
+backups/
