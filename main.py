@@ -1,17 +1,27 @@
 """
 Pipeline de Automatización Multimedia 100% Autónomo.
-Ejecución: python main.py --topic "Tema del video"
+Ejecución individual: python main.py --topic "Tema del video" --aspect-ratio 9:16
+Ejecución en lote (Batch): python main.py --topic "Tema 1" "Tema 2" "Tema 3" --aspect-ratio 9:16
+O vía archivo: python main.py --topics-file temas.txt --aspect-ratio 9:16
+
+Formatos soportados:
+- 9:16 (1080x1920) Vertical: Optimizado para YouTube Shorts, Instagram Reels y TikTok con área segura de subtítulos.
+- 16:9 (1920x1080) Horizontal: Documental cinematográfico panorámico.
 
 Flujo de producción:
-Idea/Tema -> Guion estructurado -> Síntesis de voz -> Detección de pausas/timestamps ->
-Generación de imágenes coherentes -> Montaje audiovisual (Ken Burns) -> Publicación en YouTube
+Idea/Tema -> Guion estructurado -> Síntesis de voz bilingüe -> Timestamps & Subtítulos Ground-Truth ->
+Imágenes generativas/documentales -> Montaje audiovisual Ken Burns -> Acumulación sin sobreescritura en output/
 """
 import argparse
+from datetime import datetime
 import json
+from pathlib import Path
+import re
 import shutil
 import sys
 import time
-from pathlib import Path
+import unicodedata
+from typing import List, Optional
 
 from src.config import settings, ROOT_DIR, ASSETS_DIR, IMAGES_DIR, AUDIO_DIR, SUBTITLES_DIR, TEMP_DIR, OUTPUT_DIR
 from src.logger import logger
@@ -23,7 +33,15 @@ from src.video_assembler import assemble_video
 from src.youtube_uploader import upload_video_to_youtube
 
 
-def clean_temp_workspace(clean_images: bool = True, clean_audio: bool = False) -> None:
+def slugify(text: str, max_length: int = 35) -> str:
+    """Convierte un texto o tema a un slug limpio para nombres de archivo."""
+    normalized = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    cleaned = re.sub(r"[^\w\s-]", "", normalized).strip().lower()
+    slug = re.sub(r"[-\s]+", "_", cleaned)
+    return slug[:max_length].rstrip("_") or "video"
+
+
+def clean_temp_workspace(clean_images: bool = True, clean_audio: bool = False, clean_jobs: bool = False) -> None:
     """Limpia archivos temporales de renderizado previo y opcionalmente imágenes y audio anteriores."""
     logger.info("Limpiando directorios de trabajo temporales...")
     dirs_to_clean = [TEMP_DIR]
@@ -31,6 +49,10 @@ def clean_temp_workspace(clean_images: bool = True, clean_audio: bool = False) -
         dirs_to_clean.append(IMAGES_DIR)
     if clean_audio:
         dirs_to_clean.extend([AUDIO_DIR, SUBTITLES_DIR])
+    if clean_jobs:
+        jobs_dir = ASSETS_DIR / "jobs"
+        if jobs_dir.exists():
+            dirs_to_clean.append(jobs_dir)
 
     for target_dir in dirs_to_clean:
         if target_dir.exists():
@@ -44,65 +66,108 @@ def clean_temp_workspace(clean_images: bool = True, clean_audio: bool = False) -
                     logger.warning("No se pudo eliminar {}: {}", item.name, e)
 
 
-def execute_pipeline(args: argparse.Namespace) -> None:
-    """Ejecuta el ciclo de vida completo del pipeline audiovisual."""
+def extract_topics(args: argparse.Namespace) -> List[str]:
+    """Extrae y normaliza la lista de temas desde --topic y/o --topics-file."""
+    raw_topics = []
+
+    # 1. Leer desde archivo de temas si fue provisto
+    if getattr(args, "topics_file", None):
+        t_file = Path(args.topics_file)
+        if t_file.exists():
+            with open(t_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        raw_topics.append(line)
+            logger.info("Cargados {} temas desde archivo: {}", len(raw_topics), t_file.name)
+        else:
+            logger.warning("El archivo de temas especificado no existe: {}", t_file)
+
+    # 2. Leer desde argumento --topic (lista de cadenas o separadas por comas)
+    if getattr(args, "topic", None):
+        topic_arg = args.topic
+        if isinstance(topic_arg, list):
+            for item in topic_arg:
+                parts = [p.strip() for p in item.split(",") if p.strip()]
+                raw_topics.extend(parts)
+        elif isinstance(topic_arg, str):
+            parts = [p.strip() for p in topic_arg.split(",") if p.strip()]
+            raw_topics.extend(parts)
+
+    # 3. Eliminar duplicados manteniendo orden de inserción
+    unique_topics = []
+    for t in raw_topics:
+        if t not in unique_topics:
+            unique_topics.append(t)
+
+    if not unique_topics:
+        unique_topics = ["La teoria de la muerte y el multiverso"]
+
+    return unique_topics
+
+
+def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: int, total_jobs: int) -> Path:
+    """Ejecuta el ciclo de vida completo de creación para un video individual en su propio entorno aislado."""
     start_time = time.time()
-    logger.info("=" * 70)
-    logger.info("INICIANDO PIPELINE DE AUTOMATIZACIÓN MULTIMEDIA")
-    logger.info("Tema: '{}'", args.topic)
-    logger.info("=" * 70)
+    aspect_ratio = args.aspect_ratio or settings.DEFAULT_ASPECT_RATIO
+    ratio_tag = "9x16" if aspect_ratio == "9:16" else "16x9"
+    slug = slugify(topic)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Modo Dry-Run (validación de configuración sin consumo de recursos)
-    if args.dry_run:
-        logger.info("[DRY RUN] Verificando configuración y disponibilidad de dependencias...")
-        logger.info("LLM Provider: {} (Key configurada: {})", args.llm_provider, bool(settings.GEMINI_API_KEY or settings.DEEPSEEK_API_KEY))
-        logger.info("TTS Provider: {} (ElevenLabs Key: {})", args.tts_provider, bool(settings.ELEVENLABS_API_KEY))
-        logger.info("Whisper Model: {} on {}", settings.WHISPER_MODEL, settings.WHISPER_DEVICE)
-        logger.info("Image Provider: {} (Image Key: {})", args.image_provider, bool(settings.IMAGE_API_KEY))
-        logger.info("Resolución de salida: {} @ {}fps", settings.OUTPUT_RESOLUTION, settings.OUTPUT_FPS)
-        logger.info("Subida a YouTube: {} (Privacidad: {})", args.upload, args.privacy)
-        logger.success("[DRY RUN] Plan de ejecución verificado correctamente. Listo para producción.")
-        return
+    # Carpeta aislada para assets de este trabajo
+    jobs_root = ASSETS_DIR / "jobs"
+    job_dir = jobs_root / f"{slug}_{ratio_tag}_{timestamp}"
+    job_audio_dir = job_dir / "audio"
+    job_subtitles_dir = job_dir / "subtitles"
+    job_images_dir = job_dir / "images"
+    job_temp_dir = job_dir / "temp"
 
-    if args.clean:
-        clean_temp_workspace(clean_images=True, clean_audio=True)
-    elif not args.skip_script and settings.SCRIPT_JSON_PATH.exists():
-        # Detección automática de cambio de tema para evitar contaminación entre ejecuciones
-        try:
-            with open(settings.SCRIPT_JSON_PATH, "r", encoding="utf-8") as f:
-                prev_data = json.load(f)
-                prev_title = prev_data.get("metadata", {}).get("title", "").lower()
-                current_topic_lower = args.topic.lower()
-                is_different_topic = (
-                    ("segunda guerra" in current_topic_lower and "guerra" not in prev_title) or
-                    ("multiverso" in current_topic_lower and "multiverso" not in prev_title) or
-                    (args.topic.lower() not in prev_title and not any(w in prev_title for w in args.topic.lower().split() if len(w) > 4))
-                )
-                if is_different_topic:
-                    logger.warning(
-                        "Detectado cambio de tema respecto al guion previo ('{}' -> '{}'). Purgando automáticamente assets anteriores...",
-                        prev_title,
-                        args.topic,
-                    )
-                    clean_temp_workspace(clean_images=True, clean_audio=True)
-        except Exception as e:
-            logger.debug("No se pudo auditar tema previo: {}", e)
+    for d in [job_dir, job_audio_dir, job_subtitles_dir, job_images_dir, job_temp_dir]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    job_script_path = job_dir / "script.json"
+    job_aligned_path = job_dir / "aligned_scenes.json"
+    job_audio_path = job_audio_dir / "narration.mp3"
+    job_subtitles_path = job_subtitles_dir / "subtitles.srt"
+
+    # Definir nombre de salida único en la carpeta output/
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else OUTPUT_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if getattr(args, "output_name", None) and total_jobs == 1:
+        out_filename = args.output_name if args.output_name.endswith(".mp4") else f"{args.output_name}.mp4"
+    else:
+        out_filename = f"{slug}_{ratio_tag}_{timestamp}.mp4"
+
+    target_video_path = output_dir / out_filename
+
+    width, height = settings.get_dimensions(aspect_ratio)
+    logger.info("=" * 70)
+    logger.info("INICIANDO PRODUCCIÓN [{}/{}]: '{}'", job_index, total_jobs, topic)
+    logger.info("Formato: {} ({}x{}) | Archivo Destino: {}", aspect_ratio, width, height, target_video_path.name)
+    logger.info("Espacio de trabajo aislado: {}", job_dir.name)
+    logger.info("=" * 70)
 
     # -------------------------------------------------------------
     # PASO 1: Generación de Guion y Prompts Visuales
     # -------------------------------------------------------------
     script_data: ScriptOutput
     if not args.skip_script:
-        logger.info("\n>>> [PASO 1/6] Generando guion estructurado y prompts visuales ({:.1f} min)...", args.duration_minutes)
+        logger.info("\n>>> [{}/{}] [PASO 1/6] Generando guion estructurado y prompts visuales ({:.1f} min, {})...", job_index, total_jobs, args.duration_minutes, aspect_ratio)
         script_data = generate_script(
-            topic=args.topic,
+            topic=topic,
             duration_minutes=args.duration_minutes,
             target_words=args.target_words,
             provider=args.llm_provider,
+            aspect_ratio=aspect_ratio,
         )
-        save_script_to_disk(script_data)
+        save_script_to_disk(script_data, target_path=job_script_path)
+        try:
+            save_script_to_disk(script_data, target_path=settings.SCRIPT_JSON_PATH)
+        except Exception:
+            pass
     else:
-        logger.info("\n>>> [PASO 1/6] Omitido: Cargando guion existente desde: {}", settings.SCRIPT_JSON_PATH)
+        logger.info("\n>>> [{}/{}] [PASO 1/6] Omitido: Cargando guion existente desde: {}", job_index, total_jobs, settings.SCRIPT_JSON_PATH)
         if not settings.SCRIPT_JSON_PATH.exists():
             raise FileNotFoundError(f"No existe guion previo en: {settings.SCRIPT_JSON_PATH}")
         with open(settings.SCRIPT_JSON_PATH, "r", encoding="utf-8") as f:
@@ -114,52 +179,65 @@ def execute_pipeline(args: argparse.Namespace) -> None:
     # -------------------------------------------------------------
     # PASO 2: Síntesis de Voz (TTS)
     # -------------------------------------------------------------
-    narration_audio_path = settings.NARRATION_AUDIO_PATH
+    narration_audio = job_audio_path
     if not args.skip_audio:
-        logger.info("\n>>> [PASO 2/6] Sintetizando locución de voz con pausas naturales...")
-        narration_audio_path = synthesize_voice(
+        logger.info("\n>>> [{}/{}] [PASO 2/6] Sintetizando locución de voz con pausas y pronunciación natural...", job_index, total_jobs)
+        narration_audio = synthesize_voice(
             text=script_data.narration_full,
-            output_path=settings.NARRATION_AUDIO_PATH,
+            output_path=job_audio_path,
             provider=args.tts_provider,
         )
+        try:
+            shutil.copy2(narration_audio, settings.NARRATION_AUDIO_PATH)
+        except Exception:
+            pass
     else:
-        logger.info("\n>>> [PASO 2/6] Omitido: Usando archivo de audio existente: {}", narration_audio_path)
-        if not narration_audio_path.exists():
-            raise FileNotFoundError(f"No se encontró audio de narración en: {narration_audio_path}")
+        narration_audio = settings.NARRATION_AUDIO_PATH
+        logger.info("\n>>> [{}/{}] [PASO 2/6] Omitido: Usando audio existente: {}", job_index, total_jobs, narration_audio)
+        if not narration_audio.exists():
+            raise FileNotFoundError(f"No se encontró audio de narración en: {narration_audio}")
 
     # -------------------------------------------------------------
-    # PASO 3: Detección de Pausas, Timestamps y Subtítulos
+    # PASO 3: Detección de Pausas, Timestamps y Subtítulos Ground-Truth
     # -------------------------------------------------------------
-    subtitles_path = settings.SUBTITLES_SRT_PATH
+    subtitles_file = job_subtitles_path
     if not args.skip_alignment:
-        logger.info("\n>>> [PASO 3/6] Detectando pausas y alineando timestamps con faster-whisper y pydub...")
-        script_data.scenes, subtitles_path = process_audio_and_align(
-            audio_path=narration_audio_path,
+        logger.info("\n>>> [{}/{}] [PASO 3/6] Alineando timestamps con faster-whisper y generando subtítulos Ground-Truth...", job_index, total_jobs)
+        script_data.scenes, subtitles_file = process_audio_and_align(
+            audio_path=narration_audio,
             scenes=script_data.scenes,
-            srt_output_path=settings.SUBTITLES_SRT_PATH,
+            srt_output_path=job_subtitles_path,
         )
-        # Guardar escenas alineadas actualizadas
-        save_script_to_disk(script_data, target_path=settings.ALIGNED_SCENES_PATH)
+        save_script_to_disk(script_data, target_path=job_aligned_path)
+        try:
+            shutil.copy2(subtitles_file, settings.SUBTITLES_SRT_PATH)
+            save_script_to_disk(script_data, target_path=settings.ALIGNED_SCENES_PATH)
+        except Exception:
+            pass
     else:
-        logger.info("\n>>> [PASO 3/6] Omitido: Usando alineación previa de escenas y subtítulos.")
-        if settings.ALIGNED_SCENES_PATH.exists():
-            with open(settings.ALIGNED_SCENES_PATH, "r", encoding="utf-8") as f:
-                script_data = ScriptOutput.model_validate_json(f.read())
+        logger.info("\n>>> [{}/{}] [PASO 3/6] Omitido: Usando subtítulos existentes.")
+        subtitles_file = settings.SUBTITLES_SRT_PATH
 
     # -------------------------------------------------------------
-    # PASO 4: Generación de Imágenes Coherentes 16:9
+    # PASO 4: Generación de Imágenes Coherentes (9:16 o 16:9)
     # -------------------------------------------------------------
     image_paths = []
     if not args.skip_images:
-        logger.info("\n>>> [PASO 4/6] Generando imágenes 16:9 secuenciales para cada escena...")
+        logger.info("\n>>> [{}/{}] [PASO 4/6] Generando imágenes {} secuenciales para cada escena...", job_index, total_jobs, aspect_ratio)
         image_paths = generate_images_for_scenes(
             scenes=script_data.scenes,
-            output_dir=settings.IMAGES_DIR,
+            output_dir=job_images_dir,
             provider=args.image_provider,
-            topic=args.topic,
+            topic=topic,
+            aspect_ratio=aspect_ratio,
         )
+        for img in image_paths:
+            try:
+                shutil.copy2(img, settings.IMAGES_DIR / img.name)
+            except Exception:
+                pass
     else:
-        logger.info("\n>>> [PASO 4/6] Omitido: Cargando imágenes existentes de: {}", settings.IMAGES_DIR)
+        logger.info("\n>>> [{}/{}] [PASO 4/6] Omitido: Cargando imágenes de: {}", job_index, total_jobs, settings.IMAGES_DIR)
         for idx in range(1, len(script_data.scenes) + 1):
             p = settings.IMAGES_DIR / f"scene_{idx:03d}.png"
             if not p.exists():
@@ -169,27 +247,34 @@ def execute_pipeline(args: argparse.Namespace) -> None:
     # -------------------------------------------------------------
     # PASO 5: Montaje Audiovisual con Efecto Dinámico (FFmpeg)
     # -------------------------------------------------------------
-    final_video_path = settings.FINAL_VIDEO_PATH
+    final_video = target_video_path
     if not args.skip_video:
-        logger.info("\n>>> [PASO 5/6] Ensamblando video con efecto Ken Burns y subtítulos quemados...")
-        final_video_path = assemble_video(
+        logger.info("\n>>> [{}/{}] [PASO 5/6] Ensamblando video {} con Ken Burns y subtítulos quemados en zona segura...", job_index, total_jobs, aspect_ratio)
+        final_video = assemble_video(
             scenes=script_data.scenes,
             image_paths=image_paths,
-            audio_path=narration_audio_path,
-            subtitles_path=subtitles_path,
-            output_video_path=settings.FINAL_VIDEO_PATH,
+            audio_path=narration_audio,
+            subtitles_path=subtitles_file,
+            output_video_path=target_video_path,
             burn_subtitles=not args.no_subtitles,
+            aspect_ratio=aspect_ratio,
+            temp_dir=job_temp_dir,
         )
+        # Sincronizar copia con video_final.mp4 para conveniencia
+        try:
+            shutil.copy2(final_video, settings.FINAL_VIDEO_PATH)
+        except Exception:
+            pass
     else:
-        logger.info("\n>>> [PASO 5/6] Omitido: Montaje de video saltado por usuario.")
+        logger.info("\n>>> [{}/{}] [PASO 5/6] Omitido: Montaje de video saltado por usuario.")
 
     # -------------------------------------------------------------
-    # PASO 6: Publicación en YouTube
+    # PASO 6: Publicación en YouTube (Opcional)
     # -------------------------------------------------------------
-    if args.upload:
-        logger.info("\n>>> [PASO 6/6] Publicando video en YouTube...")
+    if args.upload and final_video.exists():
+        logger.info("\n>>> [{}/{}] [PASO 6/6] Publicando video en YouTube...", job_index, total_jobs)
         video_url = upload_video_to_youtube(
-            video_path=final_video_path,
+            video_path=final_video,
             title=script_data.metadata.title,
             description=script_data.metadata.description,
             tags=script_data.metadata.tags,
@@ -197,37 +282,119 @@ def execute_pipeline(args: argparse.Namespace) -> None:
         )
         logger.success("Video disponible en YouTube: {}", video_url)
     else:
-        logger.info("\n>>> [PASO 6/6] Subida a YouTube omitida (usa flag --upload para subir automáticamente).")
+        logger.info("\n>>> [{}/{}] [PASO 6/6] Subida a YouTube omitida (usa --upload para publicar automáticamente).", job_index, total_jobs)
 
-    elapsed = time.time() - start_time
+    job_elapsed = time.time() - start_time
+    file_size_mb = final_video.stat().st_size / (1024 * 1024) if final_video.exists() else 0.0
+    logger.success(
+        "VIDEO [{}/{}] FINALIZADO CON ÉXITO EN {:.2f}s | Salida: {} ({:.2f} MB)",
+        job_index,
+        total_jobs,
+        job_elapsed,
+        final_video.name,
+        file_size_mb,
+    )
+    return final_video
+
+
+def execute_pipeline(args: argparse.Namespace) -> List[Path]:
+    """Ejecuta el ciclo de vida del pipeline para uno o múltiples videos (modo Batch)."""
+    overall_start = time.time()
+    topics = extract_topics(args)
+    total_jobs = len(topics)
+
     logger.info("=" * 70)
-    logger.success("PIPELINE FINALIZADO CON ÉXITO EN {:.2f} SEGUNDOS", elapsed)
-    logger.success("Archivo final exportado en: {}", final_video_path)
+    logger.info("PIPELINE DE AUTOMATIZACIÓN MULTIMEDIA (BATCH & VERTICAL)")
+    logger.info("Total de videos a procesar: {}", total_jobs)
+    logger.info("Formato seleccionado: {} ({}x{})", args.aspect_ratio, *settings.get_dimensions(args.aspect_ratio))
+    for i, t in enumerate(topics, start=1):
+        logger.info("  {}. {}", i, t)
     logger.info("=" * 70)
+
+    # Modo Dry-Run (validación de configuración sin consumo de recursos)
+    if args.dry_run:
+        logger.info("[DRY RUN] Verificando configuración y disponibilidad de dependencias...")
+        logger.info("LLM Provider: {} (Key configurada: {})", args.llm_provider, bool(settings.GEMINI_API_KEY or settings.DEEPSEEK_API_KEY))
+        logger.info("TTS Provider: {} (ElevenLabs Key: {})", args.tts_provider, bool(settings.ELEVENLABS_API_KEY))
+        logger.info("Whisper Model: {} on {}", settings.WHISPER_MODEL, settings.WHISPER_DEVICE)
+        logger.info("Image Provider: {} (Image Key: {})", args.image_provider, bool(settings.IMAGE_API_KEY))
+        logger.info("Escala: {} ({}x{}) @ {}fps", args.aspect_ratio, *settings.get_dimensions(args.aspect_ratio), settings.OUTPUT_FPS)
+        logger.info("Subida a YouTube: {} (Privacidad: {})", args.upload, args.privacy)
+        logger.success("[DRY RUN] Plan de ejecución verificado correctamente para {} video(s).", total_jobs)
+        return []
+
+    if args.clean:
+        clean_temp_workspace(clean_images=True, clean_audio=True, clean_jobs=True)
+
+    produced_videos: List[Path] = []
+    for idx, topic in enumerate(topics, start=1):
+        try:
+            video_path = execute_single_video_job(topic, args, job_index=idx, total_jobs=total_jobs)
+            produced_videos.append(video_path)
+        except Exception as e:
+            logger.exception("Error procesando video [{}/{} - '{}']: {}", idx, total_jobs, topic, e)
+            if total_jobs == 1:
+                raise e
+            logger.warning("Continuando con los siguientes videos del lote...")
+
+    overall_elapsed = time.time() - overall_start
+    logger.info("\n" + "=" * 70)
+    logger.success("PROCESAMIENTO FINALIZADO: {} DE {} VIDEO(S) GENERADOS CON ÉXITO ({:.2f}s)", len(produced_videos), total_jobs, overall_elapsed)
+    for idx, v in enumerate(produced_videos, start=1):
+        mb = v.stat().st_size / (1024 * 1024) if v.exists() else 0.0
+        logger.success("  {}. {} ({:.2f} MB)", idx, v, mb)
+    logger.info("=" * 70)
+    return produced_videos
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Configura los argumentos de línea de comandos."""
     parser = argparse.ArgumentParser(
-        description="Pipeline 100%% Automatizado de Creación Audiovisual para YouTube",
+        description="Pipeline 100%% Automatizado de Creación Audiovisual (Shorts, Reels, TikTok y Horizontal)",
     )
     parser.add_argument(
         "--topic",
+        nargs="+",
         type=str,
-        default="La teoria de la muerte y el multiverso",
-        help="Tema o idea central para el video educativo",
+        default=["La teoria de la muerte y el multiverso"],
+        help="Uno o varios temas para generar videos (ej: --topic 'Tema 1' 'Tema 2' o 'Tema 1, Tema 2')",
+    )
+    parser.add_argument(
+        "--topics-file",
+        type=str,
+        default=None,
+        help="Ruta a un archivo .txt con un tema por línea para generación masiva en lote (Batch)",
+    )
+    parser.add_argument(
+        "--aspect-ratio",
+        type=str,
+        choices=["9:16", "16:9"],
+        default=settings.DEFAULT_ASPECT_RATIO,
+        help="Escala de aspecto visual: 9:16 (Vertical Shorts/TikTok/Reels 1080x1920) o 16:9 (Panorámico 1920x1080). Default: 9:16",
     )
     parser.add_argument(
         "--duration-minutes",
         type=float,
         default=settings.DEFAULT_DURATION_MINUTES,
-        help="Duración estimada del video en minutos (ej: 2.5, 3.5, 5.0)",
+        help="Duración estimada de cada video en minutos (ej: 1.0 para Shorts/TikTok, 3.5 para documental)",
     )
     parser.add_argument(
         "--target-words",
         type=int,
         default=None,
-        help="Cantidad objetivo explícita de palabras para el guion (ej: 500, 750)",
+        help="Cantidad objetivo explícita de palabras para el guion (ej: 140 para Shorts de 1 min, 500 para 3.5 min)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=str(settings.OUTPUT_DIR),
+        help="Directorio donde se acumulan los videos generados sin sobreescribirse (Default: output/)",
+    )
+    parser.add_argument(
+        "--output-name",
+        type=str,
+        default=None,
+        help="Nombre de archivo específico para el video final (solo cuando se procesa un único tema)",
     )
     parser.add_argument(
         "--llm-provider",
@@ -248,7 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         choices=["imagen", "fal", "replicate", "stability", "pollinations", "pexels"],
         default=settings.IMAGE_PROVIDER,
-        help="Proveedor para generar imágenes en formato 16:9",
+        help="Proveedor para generar o descargar imágenes coherentes",
     )
     parser.add_argument(
         "--skip-script",
@@ -283,7 +450,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--upload",
         action="store_true",
-        help="Subir el video final automáticamente a YouTube vía API v3",
+        help="Subir los videos finales automáticamente a YouTube vía API v3",
     )
     parser.add_argument(
         "--privacy",
@@ -300,7 +467,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--clean",
         action="store_true",
-        help="Limpiar archivos temporales antes de iniciar la ejecución",
+        help="Limpiar archivos temporales y caché antes de iniciar la ejecución",
     )
     return parser
 

@@ -70,12 +70,28 @@ class Settings:
     # --- Duración y Estructura ---
     DEFAULT_DURATION_MINUTES: float = float(os.getenv("DEFAULT_DURATION_MINUTES", "3.5"))
 
+    DEFAULT_ASPECT_RATIO: str = os.getenv("DEFAULT_ASPECT_RATIO", "9:16")
+
     # --- Montaje de Video (Optimización de Rendimiento) ---
-    OUTPUT_RESOLUTION: str = os.getenv("OUTPUT_RESOLUTION", "1920x1080")
+    OUTPUT_RESOLUTION: str = os.getenv("OUTPUT_RESOLUTION", "1080x1920")
     OUTPUT_FPS: int = int(os.getenv("OUTPUT_FPS", "30"))
     CONCURRENT_CLIP_WORKERS: int = int(os.getenv("CONCURRENT_CLIP_WORKERS", "2"))
     FFMPEG_PRESET: str = os.getenv("FFMPEG_PRESET", "veryfast")
     FFMPEG_CRF: str = os.getenv("FFMPEG_CRF", "19")
+
+    @staticmethod
+    def get_dimensions(aspect_ratio: str = "16:9") -> tuple[int, int]:
+        """Devuelve (ancho, alto) para la resolución de salida según el aspect ratio."""
+        if aspect_ratio == "9:16":
+            return 1080, 1920
+        return 1920, 1080
+
+    @staticmethod
+    def get_zoom_buffer(aspect_ratio: str = "16:9") -> tuple[int, int]:
+        """Devuelve (ancho, alto) para el búfer intermedio de zoom según el aspect ratio."""
+        if aspect_ratio == "9:16":
+            return 1440, 2560
+        return 2560, 1440
 
     # --- YouTube API ---
     YOUTUBE_CLIENT_SECRET_FILE: str = os.getenv("YOUTUBE_CLIENT_SECRET_FILE", "client_secrets.json")

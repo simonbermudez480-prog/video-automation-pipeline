@@ -43,23 +43,39 @@ class ScriptOutput(BaseModel):
     scenes: List[Scene] = Field(description="Lista de escenas ordenadas secuencialmente (entre 15 y 25 escenas)")
 
 
-def _build_system_prompt(duration_minutes: float, target_words: int, num_scenes: int) -> str:
-    return f"""Eres un director audiovisual de documentales científicos e históricos de élite (estilo BBC, Netflix, National Geographic) y estratega de alta retención en YouTube.
-Tu objetivo es producir un guion completo para un video documental de aproximadamente {duration_minutes:.1f} minutos de duración.
+def _build_system_prompt(duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> str:
+    is_vertical = aspect_ratio == "9:16"
+    format_desc = "VERTICAL 9:16 (Shorts/Reels/TikTok)" if is_vertical else "PANORÁMICO 16:9 (Documental horizontal)"
+    ratio_guidance = (
+        "Es un video VERTICAL 9:16 para smartphones (TikTok/Shorts/Reels). La composición visual de cada escena debe ser en orientación vertical ('portrait orientation, vertical 9:16 mobile format'), con el sujeto focal perfectamente centrado en el tercio medio."
+        if is_vertical
+        else "Es un video PANORÁMICO 16:9 cinematográfico."
+    )
+    style_tag = (
+        "vertical 9:16 portrait orientation, mobile format, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
+        if is_vertical
+        else "cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
+    )
+
+    return f"""Eres un director audiovisual de documentales científicos e históricos de élite (estilo BBC, Netflix, National Geographic) y estratega de alta retención en YouTube y redes sociales de video vertical.
+Tu objetivo es producir un guion completo para un video documental {format_desc} de aproximadamente {duration_minutes:.1f} minutos de duración.
+
+Formato y composición visual: {ratio_guidance}
 
 Parámetros clave de producción:
-1. Longitud total: Alrededor de {target_words} palabras narradas (ritmo pausado pero cautivador de ~140 palabras por minuto).
-2. División en escenas: Debes dividir el guion en EXACTAMENTE entre {num_scenes - 2} y {num_scenes + 2} escenas cortas y dinámicas.
+1. Longitud total: Alrededor de {target_words} palabras narradas (ritmo cautivador de ~140 palabras por minuto).
+2. División en escenas: Debes dividir el guion en EXACTAMENTE entre {max(3, num_scenes - 1)} y {num_scenes + 1} escenas cortas y dinámicas.
 3. Cada escena debe contener entre 20 y 35 palabras (equivalente a 6 a 12 segundos de locución por escena).
 4. El guion debe estar redactado en español neutro, apasionante, riguroso y con giros que mantengan al espectador pegado a la pantalla.
 5. 'narration_full' debe ser exactamente la concatenación de todas las escenas en orden.
-6. Para cada escena, escribe un 'visual_prompt' en inglés extraordinariamente detallado para un modelo generativo 16:9:
-   - Debe describir con riqueza el sujeto visual, perspectiva de cámara, colores, ambiente y composición.
-   - Es OBLIGATORIO incluir textualmente los siguientes términos de estilo: "cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark".
-7. Para cada escena, incluye 'search_keywords' con 3 a 6 términos clave en inglés que resuman el sujeto exacto para consulta en archivos históricos o científicos (ej: 'World War II Europe map 1939', 'Normandy landings 1944').
-8. Metadatos optimizados para YouTube: Título con alto gancho emocional y de curiosidad, descripción completa y lista de tags de alto volumen.
+6. Para cada escena, escribe un 'visual_prompt' en inglés extraordinariamente detallado para un modelo generativo en formato {aspect_ratio}:
+   - Debe describir con riqueza el sujeto visual, perspectiva de cámara, colores, ambiente y composición adaptada al formato {aspect_ratio}.
+   - Es OBLIGATORIO incluir textualmente los siguientes términos de estilo: "{style_tag}".
+7. Para cada escena, incluye 'search_keywords' con 3 a 6 términos clave en inglés que resuman el sujeto exacto para consulta en archivos históricos o científicos.
+8. Metadatos optimizados para YouTube: Título con alto gancho emocional y de curiosidad (añade '#Shorts' si el formato es 9:16), descripción completa y lista de tags de alto volumen.
 9. Dicción y términos extranjeros: El texto narrado debe sonar fluido y natural al ser leído en voz alta por un locutor hispanohablante. Para conceptos técnicos, científicos o militares, prioriza términos en español natural cuando existan. Si usas nombres propios extranjeros indispensables (ej. 'Pearl Harbor', 'Winston Churchill', 'Blitzkrieg'), asegúrate de que encajen con cadencia rítmica limpia y natural dentro de la oración.
 """
+
 
 
 def _clean_json_response(raw_text: str) -> str:
@@ -71,17 +87,18 @@ def _clean_json_response(raw_text: str) -> str:
     return cleaned.strip()
 
 
-def _generate_with_gemini(topic: str, duration_minutes: float, target_words: int, num_scenes: int) -> ScriptOutput:
+def _generate_with_gemini(topic: str, duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> ScriptOutput:
     """Genera el guion de larga duración utilizando la API de Google Gemini."""
-    logger.info("Solicitando guion documental a Google Gemini ({}) - Objetivo: {:.1f} min ({} palabras, {} escenas)", settings.GEMINI_MODEL, duration_minutes, target_words, num_scenes)
+    logger.info("Solicitando guion documental a Google Gemini ({}) - Objetivo: {:.1f} min ({} palabras, {} escenas, formato: {})", settings.GEMINI_MODEL, duration_minutes, target_words, num_scenes, aspect_ratio)
     from google import genai
     from google.genai import types
 
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
-    system_prompt = _build_system_prompt(duration_minutes, target_words, num_scenes)
+    system_prompt = _build_system_prompt(duration_minutes, target_words, num_scenes, aspect_ratio)
     
     user_prompt = (
         f"Tema del documental: '{topic}'\n"
+        f"Formato: {aspect_ratio}\n"
         f"Duración requerida: {duration_minutes:.1f} minutos.\n"
         f"Total de palabras aproximado: {target_words}.\n"
         f"Estructura en aproximadamente {num_scenes} escenas cortas (6 a 12 segundos por escena)."
@@ -105,9 +122,9 @@ def _generate_with_gemini(topic: str, duration_minutes: float, target_words: int
     return ScriptOutput.model_validate(data)
 
 
-def _generate_with_deepseek(topic: str, duration_minutes: float, target_words: int, num_scenes: int) -> ScriptOutput:
+def _generate_with_deepseek(topic: str, duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> ScriptOutput:
     """Genera el guion de larga duración utilizando la API de DeepSeek."""
-    logger.info("Solicitando guion documental a DeepSeek ({}) - Objetivo: {:.1f} min", settings.DEEPSEEK_MODEL, duration_minutes)
+    logger.info("Solicitando guion documental a DeepSeek ({}) - Objetivo: {:.1f} min (formato: {})", settings.DEEPSEEK_MODEL, duration_minutes, aspect_ratio)
     from openai import OpenAI
 
     client = OpenAI(
@@ -115,10 +132,11 @@ def _generate_with_deepseek(topic: str, duration_minutes: float, target_words: i
         base_url=settings.DEEPSEEK_BASE_URL,
     )
 
-    system_prompt = _build_system_prompt(duration_minutes, target_words, num_scenes)
+    system_prompt = _build_system_prompt(duration_minutes, target_words, num_scenes, aspect_ratio)
     json_schema_hint = json.dumps(ScriptOutput.model_json_schema(), ensure_ascii=False)
     user_prompt = (
         f"Tema: '{topic}'\n"
+        f"Formato: {aspect_ratio}\n"
         f"Duración: {duration_minutes:.1f} minutos, ~{target_words} palabras, {num_scenes} escenas.\n"
         f"Responde ÚNICAMENTE un objeto JSON válido según este esquema:\n{json_schema_hint}"
     )
@@ -161,13 +179,16 @@ def _is_quantum_or_multiverse_topic(topic: str) -> bool:
     return any(term in t for term in quantum_terms)
 
 
-def _generate_wwii_fallback_script() -> ScriptOutput:
+def _generate_wwii_fallback_script(aspect_ratio: str = "16:9") -> ScriptOutput:
     """
     Genera un documental histórico completo de 18 escenas sobre la Segunda Guerra Mundial (1939-1945).
     100% enfocado en el conflicto histórico con precisión cronológica y prompts cinemáticos.
     """
-    logger.warning("Generando guion documental histórico completo para: 'Segunda Guerra Mundial' (18 escenas)")
-    style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning history concept art, no text, no watermark"
+    logger.warning("Generando guion documental histórico completo para: 'Segunda Guerra Mundial' (18 escenas, {})", aspect_ratio)
+    if aspect_ratio == "9:16":
+        style_suffix = ", vertical 9:16 portrait orientation, mobile format, centered composition, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning history concept art, no text, no watermark"
+    else:
+        style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning history concept art, no text, no watermark"
 
     scenes = [
         Scene(
@@ -321,12 +342,15 @@ def _generate_wwii_fallback_script() -> ScriptOutput:
     return ScriptOutput(metadata=metadata, narration_full=full_narration, scenes=scenes)
 
 
-def _generate_quantum_fallback_script() -> ScriptOutput:
+def _generate_quantum_fallback_script(aspect_ratio: str = "16:9") -> ScriptOutput:
     """
     Genera el documental científico de 18 escenas sobre física cuántica, multiverso e inmortalidad cuántica.
     """
-    logger.warning("Generando guion documental de cosmología: 'Muerte Cuántica y el Multiverso'")
-    style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
+    logger.warning("Generando guion documental de cosmología: 'Muerte Cuántica y el Multiverso' ({})", aspect_ratio)
+    if aspect_ratio == "9:16":
+        style_suffix = ", vertical 9:16 portrait orientation, mobile format, centered composition, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
+    else:
+        style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
 
     scenes = [
         Scene(
@@ -474,15 +498,18 @@ def _generate_quantum_fallback_script() -> ScriptOutput:
     return ScriptOutput(metadata=metadata, narration_full=full_narration, scenes=scenes)
 
 
-def _generate_dynamic_topic_fallback(topic: str, duration_minutes: float, target_words: int, num_scenes: int) -> ScriptOutput:
+def _generate_dynamic_topic_fallback(topic: str, duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> ScriptOutput:
     """
     Genera un documental dinámico de 18 escenas cortas (>500 palabras, >3 minutos)
     adaptado contextualmente a cualquier temática educativa, histórica, científica o cultural,
     sin mezclas ni contaminaciones de otros temas.
     """
     clean_topic = topic.strip()
-    logger.warning("Generando guion documental dinámico adaptado específicamente para: '{}' (18 escenas)", clean_topic)
-    style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning documentary concept art, no text, no watermark"
+    logger.warning("Generando guion documental dinámico adaptado específicamente para: '{}' (18 escenas, {})", clean_topic, aspect_ratio)
+    if aspect_ratio == "9:16":
+        style_suffix = ", vertical 9:16 portrait orientation, mobile format, centered composition, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning documentary concept art, no text, no watermark"
+    else:
+        style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning documentary concept art, no text, no watermark"
 
     arc_blueprints = [
         ("A lo largo de las épocas, pocas materias han transformado tanto nuestra comprensión del mundo como {topic}. Explorar su verdadero alcance revela fascinantes interrogantes.", "Cinematic documentary photography, wide panoramic atmospheric view representing {topic}, dramatic lighting and thoughtful composition"),
@@ -505,8 +532,9 @@ def _generate_dynamic_topic_fallback(topic: str, duration_minutes: float, target
         ("El fascinante recorrido de {topic} nos demuestra que el conocimiento nunca se detiene. Suscríbete para continuar explorando los mayores hitos de nuestra historia.", "Panoramic cinematic view of an iconic landmark or monument celebrating human knowledge and {topic}, majestic golden hour illumination"),
     ]
 
+    selected_blueprints = arc_blueprints[:num_scenes] if num_scenes and num_scenes < len(arc_blueprints) else arc_blueprints
     scenes = []
-    for idx, (narr_template, prompt_template) in enumerate(arc_blueprints, start=1):
+    for idx, (narr_template, prompt_template) in enumerate(selected_blueprints, start=1):
         narr_text = narr_template.replace("{topic}", clean_topic)
         vis_prompt = prompt_template.replace("{topic}", clean_topic) + style_suffix
         kw = f"{clean_topic} history documentary"
@@ -521,7 +549,7 @@ def _generate_dynamic_topic_fallback(topic: str, duration_minutes: float, target
 
     full_narration = " ".join([s.narration_text for s in scenes])
     metadata = VideoMetadata(
-        title=f"{clean_topic.title()}: La Historia Completa y sus Grandes Revelaciones",
+        title=f"{clean_topic.title()}: La Historia Completa y sus Grandes Revelaciones" + (" #Shorts" if aspect_ratio == "9:16" else ""),
         description=(
             f"Un documental exhaustivo y cautivador sobre {clean_topic}. "
             "Exploramos sus orígenes históricos, hitos decisivos, transformaciones clave "
@@ -550,17 +578,17 @@ def _generate_dynamic_topic_fallback(topic: str, duration_minutes: float, target
     return ScriptOutput(metadata=metadata, narration_full=full_narration, scenes=scenes)
 
 
-def _generate_fallback_script(topic: str, duration_minutes: float, target_words: int, num_scenes: int) -> ScriptOutput:
+def _generate_fallback_script(topic: str, duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> ScriptOutput:
     """
-    Genera un guion documental profundo y completo de 18 escenas cortas (>500 palabras, >3 minutos)
+    Genera un guion documental profundo y completo de escenas cortas
     seleccionando inteligentemente el contenido según la temática solicitada para evitar cualquier mezcla.
     """
     if _is_wwii_or_war_topic(topic):
-        return _generate_wwii_fallback_script()
+        return _generate_wwii_fallback_script(aspect_ratio=aspect_ratio)
     elif _is_quantum_or_multiverse_topic(topic):
-        return _generate_quantum_fallback_script()
+        return _generate_quantum_fallback_script(aspect_ratio=aspect_ratio)
     else:
-        return _generate_dynamic_topic_fallback(topic, duration_minutes, target_words, num_scenes)
+        return _generate_dynamic_topic_fallback(topic, duration_minutes, target_words, num_scenes, aspect_ratio=aspect_ratio)
 
 
 def generate_script(
@@ -568,47 +596,47 @@ def generate_script(
     duration_minutes: float = 3.5,
     target_words: Optional[int] = None,
     provider: Optional[str] = None,
+    aspect_ratio: str = "16:9",
 ) -> ScriptOutput:
     """
     Punto de entrada principal para generar el guion y metadatos.
-    Calcula dinámicamente palabras y escenas para la duración objetivo.
+    Calcula dinámicamente palabras y escenas para la duración objetivo y aspect ratio.
     """
     # Ritmo estándar de 140 palabras por minuto
     calculated_words = target_words or int(duration_minutes * 140)
-    # Entre 15 y 25 escenas (promedio de 8 a 11 segundos por escena)
-    calculated_scenes = max(15, min(25, int(duration_minutes * 5.2)))
+    # Entre 3 y 25 escenas adaptadas al metraje real (promedio de 7 a 11 segundos por escena)
+    calculated_scenes = max(3, min(25, int(duration_minutes * 5.5)))
 
     selected_provider = (provider or settings.LLM_PROVIDER).lower()
 
-    # 1. Intentar Gemini si tiene clave
+    # 1. Intentar proveedor seleccionado
     if selected_provider == "gemini" and settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "tu_clave_gemini_aqui":
         try:
-            return _generate_with_gemini(topic, duration_minutes, calculated_words, calculated_scenes)
+            return _generate_with_gemini(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
         except Exception as e:
             logger.error("Fallo con Gemini: {}. Buscando alternativas...", e)
-
-    # 2. Intentar DeepSeek si tiene clave
-    if selected_provider == "deepseek" and settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
+    elif selected_provider == "deepseek" and settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
         try:
-            return _generate_with_deepseek(topic, duration_minutes, calculated_words, calculated_scenes)
+            return _generate_with_deepseek(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
         except Exception as e:
             logger.error("Fallo con DeepSeek: {}. Buscando alternativas...", e)
 
-    # 3. Intentar el otro proveedor
-    if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "tu_clave_gemini_aqui":
+    # 2. Intentar proveedor alternativo si el principal no funcionó
+    if selected_provider != "gemini" and settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "tu_clave_gemini_aqui":
         try:
-            return _generate_with_gemini(topic, duration_minutes, calculated_words, calculated_scenes)
+            return _generate_with_gemini(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
         except Exception as e:
             logger.error("Fallo alternativo con Gemini: {}", e)
 
-    if settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
+    if selected_provider != "deepseek" and settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
         try:
-            return _generate_with_deepseek(topic, duration_minutes, calculated_words, calculated_scenes)
+            return _generate_with_deepseek(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
         except Exception as e:
             logger.error("Fallo alternativo con DeepSeek: {}", e)
 
-    # 4. Fallback estructurado de alta densidad
-    return _generate_fallback_script(topic, duration_minutes, calculated_words, calculated_scenes)
+    # 3. Fallback estructurado de alta densidad
+    return _generate_fallback_script(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
+
 
 
 def save_script_to_disk(script_output: ScriptOutput, target_path = None) -> None:

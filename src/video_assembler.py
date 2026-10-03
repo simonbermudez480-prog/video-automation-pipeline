@@ -29,45 +29,75 @@ def _get_dynamic_ken_burns_filter(
 ) -> str:
     """
     Genera la cadena de filtros zoompan de FFmpeg con movimiento CONTINUO y fluido,
-    garantizando que la cámara se mueva desde el fotograma 1 hasta el último sin congelarse.
+    adaptado tanto a formato 16:9 (horizontal) como 9:16 (vertical para Shorts/TikTok).
     """
     motion_type = scene_index % 5
     safe_frames = max(num_frames, 1)
+    is_vertical = "1080x1920" in resolution or resolution == "1080x1920"
 
-    if motion_type == 0:
-        # Zoom In fluido y progresivo hacia el centro (de 1.0x hasta 1.28x)
-        zoom_expr = f"1.0+0.28*(on/{safe_frames})"
-        x_expr = "iw/2-(iw/zoom/2)"
-        y_expr = "ih/2-(ih/zoom/2)"
-    elif motion_type == 1:
-        # Zoom Out suave y dramático (de 1.28x retrocediendo hacia 1.0x)
-        zoom_expr = f"1.28-0.28*(on/{safe_frames})"
-        x_expr = "iw/2-(iw/zoom/2)"
-        y_expr = "ih/2-(ih/zoom/2)"
-    elif motion_type == 2:
-        # Paneo horizontal fluido de Izquierda a Derecha con ligero zoom de profundidad
-        zoom_expr = f"1.18+0.08*(on/{safe_frames})"
-        x_expr = f"(on/{safe_frames})*(iw-iw/zoom)"
-        y_expr = "ih/2-(ih/zoom/2)"
-    elif motion_type == 3:
-        # Paneo horizontal fluido de Derecha a Izquierda
-        zoom_expr = f"1.18+0.08*(on/{safe_frames})"
-        x_expr = f"(1.0-(on/{safe_frames}))*(iw-iw/zoom)"
-        y_expr = "ih/2-(ih/zoom/2)"
+    if is_vertical:
+        buf_w, buf_h = 1440, 2560
+        if motion_type == 0:
+            # Zoom In vertical centrado
+            zoom_expr = f"1.0+0.25*(on/{safe_frames})"
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = "ih/2-(ih/zoom/2)"
+        elif motion_type == 1:
+            # Zoom Out vertical suave
+            zoom_expr = f"1.25-0.25*(on/{safe_frames})"
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = "ih/2-(ih/zoom/2)"
+        elif motion_type == 2:
+            # Paneo vertical fluido de Arriba hacia Abajo (Tilt Down)
+            zoom_expr = f"1.15+0.05*(on/{safe_frames})"
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = f"(on/{safe_frames})*(ih-ih/zoom)"
+        elif motion_type == 3:
+            # Paneo vertical fluido de Abajo hacia Arriba (Tilt Up)
+            zoom_expr = f"1.15+0.05*(on/{safe_frames})"
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = f"(1.0-(on/{safe_frames}))*(ih-ih/zoom)"
+        else:
+            # Zoom In con paneo diagonal
+            zoom_expr = f"1.08+0.18*(on/{safe_frames})"
+            x_expr = f"(on/{safe_frames})*(iw/2-(iw/zoom/2))"
+            y_expr = f"(on/{safe_frames})*(ih/2-(ih/zoom/2))"
     else:
-        # Paneo diagonal cinematográfico suave hacia el centro
-        zoom_expr = f"1.08+0.20*(on/{safe_frames})"
-        x_expr = f"(on/{safe_frames})*(iw/2-(iw/zoom/2))"
-        y_expr = f"(on/{safe_frames})*(ih/2-(ih/zoom/2))"
+        buf_w, buf_h = 2560, 1440
+        if motion_type == 0:
+            # Zoom In horizontal hacia el centro
+            zoom_expr = f"1.0+0.28*(on/{safe_frames})"
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = "ih/2-(ih/zoom/2)"
+        elif motion_type == 1:
+            # Zoom Out horizontal hacia afuera
+            zoom_expr = f"1.28-0.28*(on/{safe_frames})"
+            x_expr = "iw/2-(iw/zoom/2)"
+            y_expr = "ih/2-(ih/zoom/2)"
+        elif motion_type == 2:
+            # Paneo horizontal de Izquierda a Derecha
+            zoom_expr = f"1.18+0.08*(on/{safe_frames})"
+            x_expr = f"(on/{safe_frames})*(iw-iw/zoom)"
+            y_expr = "ih/2-(ih/zoom/2)"
+        elif motion_type == 3:
+            # Paneo horizontal de Derecha a Izquierda
+            zoom_expr = f"1.18+0.08*(on/{safe_frames})"
+            x_expr = f"(1.0-(on/{safe_frames}))*(iw-iw/zoom)"
+            y_expr = "ih/2-(ih/zoom/2)"
+        else:
+            # Paneo diagonal hacia el centro
+            zoom_expr = f"1.08+0.20*(on/{safe_frames})"
+            x_expr = f"(on/{safe_frames})*(iw/2-(iw/zoom/2))"
+            y_expr = f"(on/{safe_frames})*(ih/2-(ih/zoom/2))"
 
-    # Pre-escalar a 2560x1440 (2.5K): ofrece nitidez perfecta y elimina 56% del costo de CPU frente a 4K
     filter_graph = (
-        f"scale=2560:1440:force_original_aspect_ratio=increase,"
-        f"crop=2560:1440,"
+        f"scale={buf_w}:{buf_h}:force_original_aspect_ratio=increase,"
+        f"crop={buf_w}:{buf_h},"
         f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}':d={num_frames}:s={resolution}:fps={fps},"
         f"format=yuv420p"
     )
     return filter_graph
+
 
 
 def render_scene_clip(
@@ -118,30 +148,34 @@ def assemble_video(
     subtitles_path: Optional[Path] = None,
     output_video_path: Optional[Path] = None,
     burn_subtitles: bool = True,
+    aspect_ratio: str = "16:9",
+    temp_dir: Optional[Path] = None,
 ) -> Path:
     """
     Ensambla el video final aplicando:
-    1. Renderizado paralelo de clips individuales con Ken Burns dinámico y continuo.
+    1. Renderizado paralelo de clips individuales con Ken Burns dinámico (16:9 o 9:16 vertical).
     2. Transición suave de fundido cruzado (xfade de 0.5s) entre cada escena.
     3. Mapeo y mezcla con la pista de audio original.
-    4. Quemado de subtítulos con alto contraste visual (WCAG AAA).
-    5. Exportación multi-hilo acelerada a 1080p, 30 FPS en output/video_final.mp4.
+    4. Quemado de subtítulos con alto contraste visual (WCAG AAA) y zona segura móvil en 9:16.
+    5. Exportación multi-hilo acelerada a 1080p, 30 FPS.
     """
     final_output = output_video_path or settings.FINAL_VIDEO_PATH
     final_output.parent.mkdir(parents=True, exist_ok=True)
-    temp_dir = settings.TEMP_DIR
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    working_temp_dir = temp_dir or settings.TEMP_DIR
+    working_temp_dir.mkdir(parents=True, exist_ok=True)
 
     fps = settings.OUTPUT_FPS
-    resolution = settings.OUTPUT_RESOLUTION
+    is_vertical = aspect_ratio == "9:16"
+    resolution = "1080x1920" if is_vertical else "1920x1080"
     clip_workers = getattr(settings, "CONCURRENT_CLIP_WORKERS", 2)
     ffmpeg_preset = getattr(settings, "FFMPEG_PRESET", "veryfast")
     ffmpeg_crf = getattr(settings, "FFMPEG_CRF", "19")
 
     total_scenes = len(scenes)
     logger.info(
-        "Iniciando montaje audiovisual optimizado de {} escenas (Workers: {}, Preset: {}, CRF: {}, {} @ {}fps)...",
+        "Iniciando montaje audiovisual optimizado de {} escenas (Formato: {}, Workers: {}, Preset: {}, CRF: {}, {} @ {}fps)...",
         total_scenes,
+        aspect_ratio,
         clip_workers,
         ffmpeg_preset,
         ffmpeg_crf,
@@ -157,7 +191,7 @@ def assemble_video(
     for idx, (scene, img_path) in enumerate(zip(scenes, image_paths), start=1):
         base_duration = scene.duration or 6.0
         render_duration = base_duration + (TRANSITION_DURATION if idx < total_scenes else 0.0)
-        clip_path = temp_dir / f"clip_{idx:03d}.mp4"
+        clip_path = working_temp_dir / f"clip_{idx:03d}.mp4"
         clip_render_tasks.append((idx, scene, img_path, render_duration, clip_path))
 
     # Renderizado paralelo de clips con ThreadPoolExecutor
@@ -212,7 +246,7 @@ def assemble_video(
     else:
         last_v = "0:v"
 
-    # 3. Quemado de subtítulos con alto contraste
+    # 3. Quemado de subtítulos con alto contraste y zona segura según aspect ratio
     final_video_label = last_v
     if burn_subtitles and subtitles_path and subtitles_path.exists():
         try:
@@ -220,14 +254,32 @@ def assemble_video(
         except ValueError:
             rel_srt = subtitles_path.resolve().as_posix().replace(":", r"\:")
 
+        if is_vertical:
+            sub_play_res_x = 1080
+            sub_play_res_y = 1920
+            sub_margin_v = 360  # Zona segura para Shorts/TikTok/Reels en 1080x1920
+            sub_font_size = 54
+            sub_outline = 4.0
+            sub_shadow = 2.0
+        else:
+            sub_play_res_x = 1920
+            sub_play_res_y = 1080
+            sub_margin_v = 70
+            sub_font_size = 48
+            sub_outline = 3.5
+            sub_shadow = 2.0
+
         sub_filter = (
             f"subtitles='{rel_srt}':force_style="
-            f"'FontName=Arial,FontSize=22,Bold=1,PrimaryColour=&H00FFFFFF,"
-            f"OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=3,Outline=2.0,Shadow=1.0,Alignment=2,MarginV=38'"
+            f"'PlayResX={sub_play_res_x},PlayResY={sub_play_res_y},"
+            f"FontName=Arial,FontSize={sub_font_size},Bold=1,PrimaryColour=&H00FFFFFF,"
+            f"OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=3,"
+            f"Outline={sub_outline},Shadow={sub_shadow},Alignment=2,MarginV={sub_margin_v}'"
         )
         filter_complex_steps.append(f"[{last_v}]{sub_filter}[vout]")
         final_video_label = "vout"
-        logger.info("Añadiendo filtro de subtítulos de alto contraste: {}", sub_filter[:65])
+        logger.info("Añadiendo filtro de subtítulos de alto contraste ({}, PlayResY={}, MarginV={}): {}", aspect_ratio, sub_play_res_y, sub_margin_v, sub_filter[:75])
+
 
     filter_complex_str = "; ".join(filter_complex_steps)
     if filter_complex_str:
