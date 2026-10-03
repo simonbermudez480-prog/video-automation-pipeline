@@ -33,3 +33,11 @@
   - Subtítulos de alto contraste quemados.
   - Módulo de avatar revertido por requerimiento del usuario (producción limpia a pantalla completa).
 
+- [x] **Phase 7: Multi-Platform Publishing (YouTube Shorts, Instagram Reels, TikTok) & Social Copywriter**
+  - Implementación de `src/social_copywriter.py` (generación con IA de copies y hashtags especializados por plataforma con validación Pydantic y fallback determinista).
+  - Implementación de `src/multiplatform_publisher.py` (conectores API directos para YouTube, Instagram y TikTok + generador de paquetes listos `output/social_packages/<slug>_<timestamp>/`).
+  - Actualización de configuración en `src/config.py` y `.env.example` con credenciales de Instagram, TikTok y Webhook.
+  - Integración en `main.py` con flags `--publish-all`, `--publish-platforms`, `--no-social-pack` y exportación de metadatos.
+  - Verificación end-to-end exitosa con video vertical 9:16 y paquete social generado en disco.
+
+

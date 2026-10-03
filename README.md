@@ -1,23 +1,28 @@
 # 🎬 Video Automation Pipeline (100% Autónomo)
 
-Pipeline en Python 100% automatizado y ejecutable mediante un único comando para la producción integral de videos educativos y documentales con publicación opcional en YouTube:
+Pipeline en Python 100% automatizado y ejecutable mediante un único comando para la producción integral de videos educativos y virales en formatos **Vertical 9:16 (Shorts/Reels/TikTok)** y **Horizontal 16:9**, con generación automática de copies/hashtags por IA y publicación multi-plataforma:
 
-$$\text{Idea / Tema} \longrightarrow \text{Guion Estructurado} \longrightarrow \text{Voz Natural} \longrightarrow \text{Timestamps/Whisper} \longrightarrow \text{Imágenes 16:9} \longrightarrow \text{Ken Burns + Subs (FFmpeg)} \longrightarrow \text{YouTube API}$$
+$$\text{Idea / Tema} \longrightarrow \text{Guion Estructurado} \longrightarrow \text{Voz Natural} \longrightarrow \text{Timestamps/Whisper} \longrightarrow \text{Imágenes (9:16 / 16:9)} \longrightarrow \text{Ken Burns + Subs Seguros} \longrightarrow \text{Copies IA} \longrightarrow \text{Shorts / Reels / TikTok}$$
 
 ---
 
 ## 🚀 Inicio Rápido (Un Solo Comando)
 
-Ejecuta el pipeline completo desde la terminal:
-
+### 1. Formato Vertical (Shorts, Reels, TikTok) con Paquete Social y Publicación:
 ```bash
-python main.py --topic "El misterio de los Agujeros Negros"
+python main.py --topic "La biblioteca de Alejandria" --aspect-ratio 9:16 --publish-all
 ```
 
-O si deseas que una vez generado se suba directamente a tu canal de YouTube en modo privado:
-
+### 2. Modo Masivo / Batch (Múltiples Videos sin sobreescritura):
 ```bash
-python main.py --topic "El misterio de los Agujeros Negros" --upload --privacy private
+python main.py --topic "Tema 1" "Tema 2" "Tema 3" --aspect-ratio 9:16 --publish-all
+# O desde un archivo con un tema por línea:
+python main.py --topics-file temas.txt --aspect-ratio 9:16 --publish-all
+```
+
+### 3. Documental Panorámico Horizontal 16:9:
+```bash
+python main.py --topic "El misterio de los Agujeros Negros" --aspect-ratio 16:9 --duration-minutes 3.5
 ```
 
 ---
@@ -130,25 +135,43 @@ YOUTUBE_PRIVACY_STATUS=private  # private | unlisted | public
 - Configura automáticamente título, descripción, etiquetas y estado de privacidad (`private`, `unlisted`, `public`).
 - Guarda el token en `token.json` tras el primer inicio de sesión para no solicitar autorización recurrente.
 
+### 6. `src/social_copywriter.py` (Copys y Hashtags Especializados con IA)
+- Genera textos hiper-optimizados según las dinámicas de cada red social usando Gemini o DeepSeek con validación estricta Pydantic:
+  - **YouTube Shorts:** Título con gancho (<58 caracteres + `#Shorts`), descripción SEO y pregunta para comentario fijado.
+  - **Instagram Reels:** Gancho con emoji para retener antes de "...más", caption ordenado, llamada a la acción y 18 hashtags estratégicos.
+  - **TikTok:** Texto conciso (<200 caracteres) y hashtags de alto descubrimiento viral (`#fyp`, `#parati`, `#aprendecontiktok`).
+  - Generador determinista de contingencia para disponibilidad 100% garantizada.
+
+### 7. `src/multiplatform_publisher.py` (Orquestador Multi-Plataforma Híbrido)
+- **Subida Directa por API:** Publica simultáneamente en YouTube Data API v3, Meta Graph API (Reels), TikTok Content Posting API y webhooks (Make/n8n/Buffer/Metricool).
+- **Paquete de Publicación Listo (`output/social_packages/<slug>_<timestamp>/`):** Siempre exporta el video vertical junto con `youtube_shorts.txt`, `instagram_reels.txt`, `tiktok.txt`, `README.txt` y `social_manifest.json`, permitiendo publicación manual sin fricción en cualquier momento.
+
 ---
 
 ## 🎛️ Opciones de CLI (`main.py`)
 
 | Argumento | Descripción | Valor por Defecto |
 | :--- | :--- | :--- |
-| `--topic` | Tema o idea central del video | `"La teoria de la muerte y el multiverso"` |
-| `--duration-minutes` | Duración objetivo en minutos (ej: 2.5, 3.5, 5.0) | `3.5` |
+| `--topic` | Uno o varios temas (ej: `--topic "Tema 1" "Tema 2"`) | `"La teoria de la muerte y el multiverso"` |
+| `--topics-file` | Archivo `.txt` con un tema por línea (procesamiento Batch) | `None` |
+| `--aspect-ratio` | Escala visual: `9:16` (Vertical Shorts/Reels/TikTok) o `16:9` (Horizontal) | `9:16` |
+| `--duration-minutes` | Duración objetivo en minutos (ej: 0.5 para 30s, 1.0 para Shorts, 3.5 para documental) | `1.0` |
 | `--target-words` | Cantidad explícita de palabras para el guion | Automático (~140 ppm) |
+| `--output-dir` | Directorio donde se acumulan los videos generados | `output/` |
+| `--output-name` | Nombre de archivo específico (solo para video individual) | Automático (`<slug>_<ratio>_<fecha>.mp4`) |
+| `--publish`, `--publish-all` | Genera copys con IA y publica/prepara en Shorts, Reels y TikTok | `False` |
+| `--publish-platforms` | Plataformas específicas (`youtube`, `instagram`, `tiktok`, `all`) | Todas si se usa `--publish-all` |
+| `--no-social-pack` | No generar la carpeta de paquete local en `output/social_packages/` | `False` |
 | `--llm-provider` | Proveedor LLM (`gemini`, `deepseek`) | `gemini` |
 | `--tts-provider` | Proveedor TTS (`elevenlabs`, `edge-tts`) | `edge-tts` |
 | `--image-provider` | Proveedor de imágenes (`imagen`, `fal`, `pollinations`, `pexels`) | `pollinations` |
 | `--skip-script` | Usa `assets/script.json` existente sin llamar al LLM | `False` |
-| `--skip-audio` | Usa `assets/audio/narration.mp3` existente | `False` |
+| `--skip-audio` | Usa audio existente sin llamar a TTS | `False` |
 | `--skip-alignment` | Salta Whisper y usa alineación previa | `False` |
-| `--skip-images` | Usa imágenes existentes en `assets/images/` | `False` |
+| `--skip-images` | Usa imágenes existentes en disco | `False` |
 | `--skip-video` | Salta el renderizado final de video | `False` |
 | `--no-subtitles` | No quema subtítulos en el video | `False` |
-| `--upload` | Sube automáticamente el video a YouTube al finalizar | `False` |
+| `--upload` | Sube únicamente a YouTube vía API v3 | `False` |
 | `--privacy` | Privacidad en YouTube (`private`, `unlisted`, `public`) | `private` |
 | `--dry-run` | Valida credenciales y configuración sin renderizar | `False` |
 | `--clean` | Limpia archivos temporales antes de empezar | `False` |

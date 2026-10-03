@@ -26,6 +26,8 @@ assets/temp/
 # Salidas de video finales y logs
 output/*.mp4
 output/*.mkv
+output/social_packages/
+assets/jobs/
 logs/
 *.log
 

@@ -46,3 +46,22 @@
 - Ejecución con un solo comando: `python main.py --topic "Tema del video"`.
 - Opciones de omisión de etapas para debugging (`--skip-script`, `--skip-audio`, `--skip-timestamps`, `--skip-images`, `--skip-video`, `--upload`, `--dry-run`).
 - Logging profesional con timestamps, niveles de severidad y formato visual.
+
+### FR-08: Multi-Platform AI Social Copywriter (`src/social_copywriter.py`)
+- Generación de copies y hashtags especializados mediante IA (Gemini / DeepSeek):
+  - **YouTube Shorts:** Título con alto gancho (<60 caracteres + `#Shorts`), descripción estructurada con llamada a la acción y tags de búsqueda.
+  - **Instagram Reels:** Gancho inicial en primera línea (hook), cuerpo explicativo conciso, CTA ("Guarda este video", "Síguenos") y 15-20 hashtags estratégicos combinando nicho y alto alcance.
+  - **TikTok:** Copy directo y viral (<250 caracteres), hook que detenga el scroll y 5-7 hashtags virales (`#fyp`, `#parati`, `#aprendecontiktok`, etc.).
+- Salida estructurada con validación Pydantic y plantillas fallback de alta conversión.
+
+### FR-09: Multi-Platform Publishing Flow (`src/multiplatform_publisher.py`)
+- Enfoque híbrido:
+  - **Conectores directos:**
+    - YouTube Shorts vía YouTube Data API v3 (`src/youtube_uploader.py`).
+    - Instagram Reels vía Meta Graph API (con `INSTAGRAM_ACCESS_TOKEN` y `INSTAGRAM_BUSINESS_ACCOUNT_ID`).
+    - TikTok vía TikTok Content Posting API (con `TIKTOK_ACCESS_TOKEN`) o soporte de webhook multi-red.
+  - **Paquete de publicación listo (`output/social_packages/<job_slug>/`):**
+    - Copia del video en alta resolución 9:16.
+    - Archivos de texto listos para copiar y pegar: `youtube_shorts.txt`, `instagram_reels.txt`, `tiktok.txt`.
+    - Manifiesto `social_manifest.json` para integración con herramientas de automatización (Metricool, Buffer, Make, n8n).
+

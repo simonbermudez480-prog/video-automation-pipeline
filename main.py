@@ -1,8 +1,8 @@
 """
 Pipeline de Automatización Multimedia 100% Autónomo.
-Ejecución individual: python main.py --topic "Tema del video" --aspect-ratio 9:16
-Ejecución en lote (Batch): python main.py --topic "Tema 1" "Tema 2" "Tema 3" --aspect-ratio 9:16
-O vía archivo: python main.py --topics-file temas.txt --aspect-ratio 9:16
+Ejecución individual: python main.py --topic "Tema del video" --aspect-ratio 9:16 --publish-all
+Ejecución en lote (Batch): python main.py --topic "Tema 1" "Tema 2" "Tema 3" --aspect-ratio 9:16 --publish-all
+O vía archivo: python main.py --topics-file temas.txt --aspect-ratio 9:16 --publish-all
 
 Formatos soportados:
 - 9:16 (1080x1920) Vertical: Optimizado para YouTube Shorts, Instagram Reels y TikTok con área segura de subtítulos.
@@ -10,7 +10,8 @@ Formatos soportados:
 
 Flujo de producción:
 Idea/Tema -> Guion estructurado -> Síntesis de voz bilingüe -> Timestamps & Subtítulos Ground-Truth ->
-Imágenes generativas/documentales -> Montaje audiovisual Ken Burns -> Acumulación sin sobreescritura en output/
+Imágenes generativas/documentales -> Montaje audiovisual Ken Burns -> Acumulación sin sobreescritura en output/ ->
+Copies y Hashtags con IA -> Publicación y empaquetado Multi-Plataforma (Shorts, Reels, TikTok)
 """
 import argparse
 from datetime import datetime
@@ -31,6 +32,8 @@ from src.audio_processor import process_audio_and_align
 from src.image_generator import generate_images_for_scenes
 from src.video_assembler import assemble_video
 from src.youtube_uploader import upload_video_to_youtube
+from src.social_copywriter import generate_social_copy, SocialBundle
+from src.multiplatform_publisher import publish_video_multiplatform
 
 
 def slugify(text: str, max_length: int = 35) -> str:
@@ -269,20 +272,51 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
         logger.info("\n>>> [{}/{}] [PASO 5/6] Omitido: Montaje de video saltado por usuario.")
 
     # -------------------------------------------------------------
-    # PASO 6: Publicación en YouTube (Opcional)
+    # PASO 6: Copys con IA y Publicación Multi-Plataforma (Shorts, Reels, TikTok)
     # -------------------------------------------------------------
-    if args.upload and final_video.exists():
-        logger.info("\n>>> [{}/{}] [PASO 6/6] Publicando video en YouTube...", job_index, total_jobs)
-        video_url = upload_video_to_youtube(
-            video_path=final_video,
-            title=script_data.metadata.title,
-            description=script_data.metadata.description,
-            tags=script_data.metadata.tags,
-            privacy_status=args.privacy,
+    platforms_to_publish: List[str] = []
+    if getattr(args, "publish_all", False) or getattr(args, "publish", False):
+        platforms_to_publish = ["youtube", "instagram", "tiktok"]
+    elif getattr(args, "publish_platforms", None):
+        platforms_to_publish = [p.lower() for p in args.publish_platforms]
+    elif getattr(args, "upload", False):
+        platforms_to_publish = ["youtube"]
+
+    create_social_pack = not getattr(args, "no_social_pack", False)
+
+    if final_video.exists() and (create_social_pack or platforms_to_publish):
+        logger.info(
+            "\n>>> [{}/{}] [PASO 6/6] Redactando copies optimizados con IA y organizando distribución multi-plataforma...",
+            job_index,
+            total_jobs,
         )
-        logger.success("Video disponible en YouTube: {}", video_url)
+        try:
+            est_seconds = (args.duration_minutes or 1.0) * 60.0
+            social_bundle = generate_social_copy(
+                topic=topic,
+                narration_summary=script_data.narration_full,
+                duration_seconds=est_seconds,
+                provider=args.llm_provider,
+            )
+            logger.info("Copies listos: Título YouTube = '{}'", social_bundle.youtube_shorts.title)
+
+            pub_results = publish_video_multiplatform(
+                video_path=final_video,
+                bundle=social_bundle,
+                platforms=platforms_to_publish,
+                create_package=create_social_pack,
+                privacy=args.privacy,
+            )
+            if "youtube" in pub_results and pub_results["youtube"].get("url"):
+                logger.success("Video disponible en YouTube: {}", pub_results["youtube"]["url"])
+        except Exception as e:
+            logger.error("Error durante la generación de copies o publicación social: {}", e)
     else:
-        logger.info("\n>>> [{}/{}] [PASO 6/6] Subida a YouTube omitida (usa --upload para publicar automáticamente).", job_index, total_jobs)
+        logger.info(
+            "\n>>> [{}/{}] [PASO 6/6] Publicación social omitida (usa --publish-all o --publish para publicar en Shorts, Reels y TikTok).",
+            job_index,
+            total_jobs,
+        )
 
     job_elapsed = time.time() - start_time
     file_size_mb = final_video.stat().st_size / (1024 * 1024) if final_video.exists() else 0.0
@@ -319,7 +353,8 @@ def execute_pipeline(args: argparse.Namespace) -> List[Path]:
         logger.info("Whisper Model: {} on {}", settings.WHISPER_MODEL, settings.WHISPER_DEVICE)
         logger.info("Image Provider: {} (Image Key: {})", args.image_provider, bool(settings.IMAGE_API_KEY))
         logger.info("Escala: {} ({}x{}) @ {}fps", args.aspect_ratio, *settings.get_dimensions(args.aspect_ratio), settings.OUTPUT_FPS)
-        logger.info("Subida a YouTube: {} (Privacidad: {})", args.upload, args.privacy)
+        logger.info("Publicación Social: Todo={} (Plataformas: {}, Pack Local: {})", bool(args.publish_all), args.publish_platforms, not args.no_social_pack)
+        logger.info("Subida a YouTube: {} (Privacidad: {})", bool(args.upload or args.publish_all), args.privacy)
         logger.success("[DRY RUN] Plan de ejecución verificado correctamente para {} video(s).", total_jobs)
         return []
 
@@ -451,6 +486,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--upload",
         action="store_true",
         help="Subir los videos finales automáticamente a YouTube vía API v3",
+    )
+    parser.add_argument(
+        "--publish",
+        "--publish-all",
+        dest="publish_all",
+        action="store_true",
+        help="Generar copies/hashtags con IA y distribuir simultáneamente a YouTube Shorts, Instagram Reels y TikTok",
+    )
+    parser.add_argument(
+        "--publish-platforms",
+        nargs="+",
+        choices=["youtube", "instagram", "tiktok", "all"],
+        default=None,
+        help="Especificar redes para publicación (ej: --publish-platforms youtube instagram)",
+    )
+    parser.add_argument(
+        "--no-social-pack",
+        action="store_true",
+        help="No generar el paquete local con video, textos y manifiesto en output/social_packages/",
     )
     parser.add_argument(
         "--privacy",

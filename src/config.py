@@ -19,10 +19,11 @@ AUDIO_DIR = ASSETS_DIR / "audio"
 SUBTITLES_DIR = ASSETS_DIR / "subtitles"
 TEMP_DIR = ASSETS_DIR / "temp"
 OUTPUT_DIR = ROOT_DIR / "output"
+SOCIAL_PACKAGES_DIR = OUTPUT_DIR / "social_packages"
 LOGS_DIR = ROOT_DIR / "logs"
 
 # Asegurar existencia de directorios operativos
-for directory in [ASSETS_DIR, IMAGES_DIR, AUDIO_DIR, SUBTITLES_DIR, TEMP_DIR, OUTPUT_DIR, LOGS_DIR]:
+for directory in [ASSETS_DIR, IMAGES_DIR, AUDIO_DIR, SUBTITLES_DIR, TEMP_DIR, OUTPUT_DIR, SOCIAL_PACKAGES_DIR, LOGS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -35,6 +36,7 @@ class Settings:
     SUBTITLES_DIR = SUBTITLES_DIR
     TEMP_DIR = TEMP_DIR
     OUTPUT_DIR = OUTPUT_DIR
+    SOCIAL_PACKAGES_DIR = SOCIAL_PACKAGES_DIR
     LOGS_DIR = LOGS_DIR
 
     # --- LLM / Guion ---
@@ -99,6 +101,17 @@ class Settings:
     YOUTUBE_PRIVACY_STATUS: Literal["private", "unlisted", "public"] = os.getenv( # type: ignore
         "YOUTUBE_PRIVACY_STATUS", "private"
     ).lower()
+
+    # --- Instagram Reels (Meta Graph API) ---
+    INSTAGRAM_ACCESS_TOKEN: str = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
+    INSTAGRAM_BUSINESS_ACCOUNT_ID: str = os.getenv("INSTAGRAM_BUSINESS_ACCOUNT_ID", "")
+
+    # --- TikTok Content Posting API ---
+    TIKTOK_ACCESS_TOKEN: str = os.getenv("TIKTOK_ACCESS_TOKEN", "")
+    TIKTOK_CREATOR_ID: str = os.getenv("TIKTOK_CREATOR_ID", "")
+
+    # --- Webhooks Multi-Plataforma (Metricool, Buffer, Make, n8n) ---
+    SOCIAL_WEBHOOK_URL: str = os.getenv("SOCIAL_WEBHOOK_URL", "")
 
     # Archivos clave de salida
     SCRIPT_JSON_PATH = ASSETS_DIR / "script.json"
