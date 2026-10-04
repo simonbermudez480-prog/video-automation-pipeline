@@ -70,7 +70,7 @@ class Settings:
     ENABLE_IMAGE_ENHANCEMENT: bool = os.getenv("ENABLE_IMAGE_ENHANCEMENT", "true").lower() in ("true", "1", "yes")
 
     # --- Duración y Estructura ---
-    DEFAULT_DURATION_MINUTES: float = float(os.getenv("DEFAULT_DURATION_MINUTES", "3.5"))
+    DEFAULT_DURATION_MINUTES: float = float(os.getenv("DEFAULT_DURATION_MINUTES", "2.5"))
 
     DEFAULT_ASPECT_RATIO: str = os.getenv("DEFAULT_ASPECT_RATIO", "9:16")
 

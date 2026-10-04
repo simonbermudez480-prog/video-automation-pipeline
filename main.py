@@ -412,7 +412,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--duration-minutes",
         type=float,
         default=settings.DEFAULT_DURATION_MINUTES,
-        help="Duración estimada de cada video en minutos (ej: 1.0 para Shorts/TikTok, 3.5 para documental)",
+        help="Duración estimada de cada video en minutos (ej: 2.0 a 3.0 para videos largos, default: 2.5 min)",
     )
     parser.add_argument(
         "--target-words",
