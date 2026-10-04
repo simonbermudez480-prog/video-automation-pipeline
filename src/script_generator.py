@@ -578,6 +578,144 @@ def _generate_dynamic_topic_fallback(topic: str, duration_minutes: float, target
     return ScriptOutput(metadata=metadata, narration_full=full_narration, scenes=scenes)
 
 
+def _is_dimension_or_senses_topic(topic: str) -> bool:
+    t = topic.lower()
+    dimension_keywords = ["dimension", "dimensión", "4ta", "cuarta", "4 dimension", "teseracto", "tesseract", "hipercubo", "sentido", "sentidos", "propiocep", "cronocep"]
+    return any(k in t for k in dimension_keywords)
+
+
+def _generate_dimension_and_senses_fallback_script(aspect_ratio: str = "9:16") -> ScriptOutput:
+    logger.info("Cargando guion documental maestro especializado: 'La Cuarta Dimensión y los Sentidos Ocultos' ({})", aspect_ratio)
+    if aspect_ratio == "9:16":
+        style_suffix = ", vertical 9:16 portrait orientation, mobile format, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
+    else:
+        style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
+
+    scenes_data = [
+        (
+            1,
+            "Desde niños nos enseñaron que el mundo tiene tres dimensiones y que solo poseemos cinco sentidos. Ambas afirmaciones son completamente falsas.",
+            "Surreal glowing human silhouette standing before an unfolding geometric 4D tesseract in deep cosmic hyperspace, volumetric neon lighting",
+            "fourth dimension tesseract hyperspace human silhouette"
+        ),
+        (
+            2,
+            "La neurociencia moderna confirma que poseemos al menos nueve sentidos. Uno de los más fascinantes es la propiocepción: la capacidad de saber exactamente dónde está cada parte de tu cuerpo incluso con los ojos cerrados.",
+            "Artistic medical visualization of human neural pathways glowing through muscles and joints, proprioception sensory grid in blue and gold light, photorealistic",
+            "proprioception sensory neuroscience human body glowing nerves"
+        ),
+        (
+            3,
+            "Otro sentido vital es la equilibriocepción, gobernada por los canales del oído interno, detectando la aceleración y la gravedad para mantenernos en pie en un planeta en constante movimiento.",
+            "Intricate close-up of human inner ear vestibular system transformed into luminous cosmic gyroscopes and fluid dynamics, photorealistic",
+            "vestibular system balance sense inner ear gyroscope"
+        ),
+        (
+            4,
+            "A ellos se suman la termocepción, que mide el flujo de temperatura, y la interocepción, el radar biológico interno que lee los latidos del corazón y las señales de los órganos vitales.",
+            "Ethereal translucent human torso with pulsing anatomical heart and thermal energy radiance, warm red and cool cyan tones, cinematic lighting",
+            "interoception human heart thermal imaging anatomical glowing"
+        ),
+        (
+            5,
+            "Nuestros sentidos evolucionaron para sobrevivir en un espacio tridimensional: longitud, anchura y altura. Pero, ¿qué ocurre si el universo contiene dimensiones superiores?",
+            "Cosmic spatial grid bending and twisting into higher geometric folds, celestial event horizon, dramatic volumetric shadows, photorealistic",
+            "spatial dimensions grid bending higher geometry universe"
+        ),
+        (
+            6,
+            "Imagina una criatura bidimensional viviendo en una hoja de papel plano. Si una esfera tridimensional atraviesa su plano, el ser plano solo vería un círculo que crece y se encoge de la nada.",
+            "Conceptual visualization of a luminous 3D glass sphere passing through a dark glowing 2D geometric plane, neon slice rings expanding, surreal conceptual art",
+            "flatland concept 3D sphere passing through 2D plane geometry"
+        ),
+        (
+            7,
+            "De la misma manera, los seres humanos no podemos ver la cuarta dimensión espacial directamente; únicamente podemos observar sus sombras tridimensionales proyectadas en nuestro espacio.",
+            "A complex four-dimensional hypercube tesseract casting a shifting three-dimensional geometric shadow onto a reflective dark surface, dramatic studio lighting",
+            "tesseract 4D shadow projected in 3D space reflective floor"
+        ),
+        (
+            8,
+            "Esta figura geométrica es el teseracto o hipercubo: un cubo cuyos vértices se extienden en un ángulo perpendicular de noventa grados que nuestro cerebro no puede concebir.",
+            "Hypnotic 3D rendering of a translucent glass and neon tesseract rotating infinitely into itself, sacred geometry, cybernetic hyperdimensional aura",
+            "hypercube tesseract rotating geometry glass neon glowing"
+        ),
+        (
+            9,
+            "En la teoría de la relatividad de Einstein, el tiempo actúa como una cuarta dimensión inseparable del espacio, formando el tejido elástico del espacio-tiempo donde pasado, presente y futuro coexisten.",
+            "Fabric of spacetime warped like a liquid glass vortex, clocks melting and bending along cosmic gravitational waves, interstellar aesthetics",
+            "spacetime fabric relativity warping time dimension gravity"
+        ),
+        (
+            10,
+            "Para navegar esta coordenada temporal, poseemos la cronocepción: la red neuronal de relojes biológicos en el cerebro que nos permite experimentar el paso del tiempo.",
+            "Futuristic brain neural synapses glowing like constellations intertwined with ancient golden clockwork mechanisms, atmospheric particle dust",
+            "chronoception brain neural clocks time perception glowing"
+        ),
+        (
+            11,
+            "La física teórica sugiere que el cosmos podría tener hasta once dimensiones, enrolladas a una escala cuántica invisible a nuestros ojos biológicos.",
+            "Intricate Calabi-Yau manifold floating in deep space, hyper-detailed quantum multidimensional geometry, iridescent colors",
+            "string theory calabi yau manifold quantum dimensions cosmos"
+        ),
+        (
+            12,
+            "Nuestros sentidos no fueron diseñados para mostrarnos la totalidad de la realidad, sino únicamente la pequeña porción necesaria para garantizar la supervivencia de nuestra especie.",
+            "Human eye iris expanding into an infinite fractal kaleidoscope of hidden dimensions and galaxies, macro cinematography",
+            "human eye iris macro universe hidden dimensions fractal"
+        ),
+        (
+            13,
+            "La física moderna y la neurociencia revelan una misma verdad: el cosmos es infinitamente más vasto que las tres dimensiones y los cinco sentidos que creemos dominar.",
+            "Awe-inspiring view of an astronomer standing on a cliff gazing at cosmic multidimensional aurora borealis across the night sky, epic scale, photorealistic",
+            "astronomer cliff night sky cosmos multidimensional aurora"
+        ),
+        (
+            14,
+            "¿Qué sentido oculto te gustaría desbloquear para percibir la cuarta dimensión? Déjalo en los comentarios y suscríbete para expandir tu mente todos los días.",
+            "Majestic floating golden portal transitioning between human anatomy and higher-dimensional geometry, warm radiant light, cinematic masterpiece",
+            "cosmic golden portal higher dimension human mind transcendence"
+        )
+    ]
+
+    scenes = [
+        Scene(
+            scene_id=sid,
+            narration_text=text,
+            visual_prompt=prompt + style_suffix,
+            search_keywords=kw,
+        )
+        for sid, text, prompt, kw in scenes_data
+    ]
+
+    full_narration = " ".join([s.narration_text for s in scenes])
+    metadata = VideoMetadata(
+        title="La Cuarta Dimensión y los Sentidos Ocultos de tu Cerebro #Shorts",
+        description=(
+            "¿Solo tenemos 5 sentidos y vivimos en 3 dimensiones? La ciencia demuestra que ambas ideas son falsas. "
+            "Descubre los sentidos ocultos del cuerpo humano (propiocepción, equilibriocepción, cronocepción) "
+            "y cómo la física explica la fascinante cuarta dimensión y el teseracto.\n\n"
+            "🔔 Suscríbete para explorar los mayores enigmas de la ciencia y la mente humana.\n"
+            "#CuartaDimension #SentidosOcultos #Teseracto #Neurociencia #Fisica #Shorts #Documental"
+        ),
+        tags=[
+            "Cuarta Dimension",
+            "Teseracto",
+            "Sentidos Ocultos",
+            "Propiocepcion",
+            "Neurociencia",
+            "Fisica Cuantica",
+            "Espacio Tiempo",
+            "Ciencia",
+            "Documental",
+            "Educacion",
+            "Curiosidades",
+            "Shorts",
+        ],
+    )
+    return ScriptOutput(metadata=metadata, narration_full=full_narration, scenes=scenes)
+
+
 def _generate_fallback_script(topic: str, duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> ScriptOutput:
     """
     Genera un guion documental profundo y completo de escenas cortas
@@ -587,6 +725,8 @@ def _generate_fallback_script(topic: str, duration_minutes: float, target_words:
         return _generate_wwii_fallback_script(aspect_ratio=aspect_ratio)
     elif _is_quantum_or_multiverse_topic(topic):
         return _generate_quantum_fallback_script(aspect_ratio=aspect_ratio)
+    elif _is_dimension_or_senses_topic(topic):
+        return _generate_dimension_and_senses_fallback_script(aspect_ratio=aspect_ratio)
     else:
         return _generate_dynamic_topic_fallback(topic, duration_minutes, target_words, num_scenes, aspect_ratio=aspect_ratio)
 
