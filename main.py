@@ -354,6 +354,7 @@ def execute_pipeline(args: argparse.Namespace) -> List[Path]:
         logger.info("Image Provider: {} (Image Key: {})", args.image_provider, bool(settings.IMAGE_API_KEY))
         logger.info("Escala: {} ({}x{}) @ {}fps", args.aspect_ratio, *settings.get_dimensions(args.aspect_ratio), settings.OUTPUT_FPS)
         logger.info("Publicación Social: Todo={} (Plataformas: {}, Pack Local: {})", bool(args.publish_all), args.publish_platforms, not args.no_social_pack)
+        logger.info("Buffer Publisher: Token Configurado={} (Modo: {})", bool(settings.BUFFER_ACCESS_TOKEN), settings.BUFFER_SHARE_MODE)
         logger.info("Subida a YouTube: {} (Privacidad: {})", bool(args.upload or args.publish_all), args.privacy)
         logger.success("[DRY RUN] Plan de ejecución verificado correctamente para {} video(s).", total_jobs)
         return []

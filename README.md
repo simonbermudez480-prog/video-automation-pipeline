@@ -142,9 +142,15 @@ YOUTUBE_PRIVACY_STATUS=private  # private | unlisted | public
   - **TikTok:** Texto conciso (<200 caracteres) y hashtags de alto descubrimiento viral (`#fyp`, `#parati`, `#aprendecontiktok`).
   - Generador determinista de contingencia para disponibilidad 100% garantizada.
 
-### 7. `src/multiplatform_publisher.py` (Orquestador Multi-Plataforma Híbrido)
-- **Subida Directa por API:** Publica simultáneamente en YouTube Data API v3, Meta Graph API (Reels), TikTok Content Posting API y webhooks (Make/n8n/Buffer/Metricool).
-- **Paquete de Publicación Listo (`output/social_packages/<slug>_<timestamp>/`):** Siempre exporta el video vertical junto con `youtube_shorts.txt`, `instagram_reels.txt`, `tiktok.txt`, `README.txt` y `social_manifest.json`, permitiendo publicación manual sin fricción en cualquier momento.
+### 7. `src/buffer_publisher.py` (Publicación 100% Automática vía Buffer GraphQL API)
+- Conexión oficial directa con la API GraphQL de Buffer (`https://api.buffer.com`).
+- **Autodescubrimiento Dinámico de Canales:** Detecta automáticamente tus canales vinculados de YouTube Shorts, Instagram Reels y TikTok.
+- **Alojamiento Automático de Video:** Provee la URL directa segura requerida por Buffer para procesar el archivo.
+- **Distribución Simultánea con un Clic:** Publica en las 3 plataformas a la vez con título optimizado, categorización educativa, captions nativos y hashtags virales específicos.
+
+### 8. `src/multiplatform_publisher.py` (Orquestador Multi-Plataforma Híbrido)
+- **Subida Directa por API / Buffer:** Publica simultáneamente vía Buffer GraphQL API, YouTube Data API v3, Meta Graph API y TikTok API.
+- **Paquete de Publicación Listo (`output/social_packages/<slug>_<timestamp>/`):** Siempre exporta el video vertical junto con `youtube_shorts.txt`, `instagram_reels.txt`, `tiktok.txt`, `README.txt` y `social_manifest.json`.
 
 ---
 

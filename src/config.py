@@ -113,6 +113,10 @@ class Settings:
     # --- Webhooks Multi-Plataforma (Metricool, Buffer, Make, n8n) ---
     SOCIAL_WEBHOOK_URL: str = os.getenv("SOCIAL_WEBHOOK_URL", "")
 
+    # --- Buffer GraphQL API (YouTube, Instagram, TikTok) ---
+    BUFFER_ACCESS_TOKEN: str = os.getenv("BUFFER_ACCESS_TOKEN", "")
+    BUFFER_SHARE_MODE: str = os.getenv("BUFFER_SHARE_MODE", "shareNow")
+
     # Archivos clave de salida
     SCRIPT_JSON_PATH = ASSETS_DIR / "script.json"
     ALIGNED_SCENES_PATH = ASSETS_DIR / "aligned_scenes.json"

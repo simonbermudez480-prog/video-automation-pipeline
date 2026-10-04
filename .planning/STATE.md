@@ -5,10 +5,9 @@
 - **Active Task:** Phase 7 Finalized and Verified. Ready for new feature requests or production scaling.
 - **Completed:**
   - `src/social_copywriter.py`: Modelos Pydantic (`YouTubeShortsPost`, `InstagramReelsPost`, `TikTokPost`, `SocialBundle`), integración con Gemini / DeepSeek y fallback analítico determinista con títulos <58 chars con `#Shorts`, hooks para Instagram Reels y TikTok con hashtags categorizados.
-  - `src/multiplatform_publisher.py`: Conectores a YouTube Data API v3, Meta Graph API (Instagram Reels), TikTok Content Posting API, despachador de Webhook y generador offline de paquetes sociales listos para publicar (`output/social_packages/<slug>_<timestamp>/`).
-  - Integración en `main.py` CLI (`--publish-all`, `--publish-platforms`, `--no-social-pack`).
-  - Configuración y variables en `src/config.py` y `.env.example`.
-  - Prueba integral end-to-end completada exitosamente generando video vertical 9:16 y paquete social estructurado para "La Biblioteca De Alejandria".
+  - `src/buffer_publisher.py`: Conector oficial con Buffer GraphQL API (`https://api.buffer.com`). Autodescubrimiento dinámico de canales para YouTube Shorts ("Historia y curiosidades"), Instagram Reels ("@historiaycultura2411") y TikTok ("@historiaycultura2411"). Subida de video a hosting temporal público para ingesta en Buffer y mutación `createPost` con copys específicos por red social.
+  - Integración en `src/multiplatform_publisher.py` y `main.py` CLI con `--publish-all`.
+  - Verificación en vivo: 3 publicaciones exitosas confirmadas con Post IDs reales en Buffer (`6ac19863fec59133948d0678`, `6ac19868814d657011dba348`, `6ac198755829d2489afd673f`).
 
 ## Decisions & Conventions
 - **LLM Engine:** Default to Gemini 2.5 Flash via `google-genai` SDK with DeepSeek API option via OpenAI client protocol.

@@ -287,16 +287,34 @@ class MultiPlatformPublisher:
             package_dir = self.create_social_package(video_path, bundle)
             results["package_directory"] = str(package_dir)
 
-        # 2. Publicación en YouTube Shorts
-        if "youtube" in chosen:
+        # 2. Publicación unificada vía Buffer si el token está configurado
+        buffer_token = getattr(settings, "BUFFER_ACCESS_TOKEN", "")
+        if buffer_token and chosen:
+            logger.info("Buffer API detectado: Ejecutando publicación unificada en redes vinculadas...")
+            try:
+                from src.buffer_publisher import BufferPublisher
+                buf = BufferPublisher(buffer_token)
+                buf_res = buf.publish_all_platforms(
+                    video_path=video_path,
+                    bundle=bundle,
+                    platforms=chosen,
+                    privacy=privacy,
+                )
+                results["buffer"] = buf_res
+                for plat, status_data in buf_res.get("platforms", {}).items():
+                    results[plat] = status_data
+            except Exception as e:
+                logger.error("Error durante publicación con Buffer: {}", e)
+                results["buffer"] = {"status": "error", "message": str(e)}
+
+        # 3. Publicación directa fallback si no se gestionó por Buffer
+        if "youtube" in chosen and "youtube" not in results:
             results["youtube"] = self.publish_youtube(video_path, bundle, privacy=privacy)
 
-        # 3. Publicación en Instagram Reels
-        if "instagram" in chosen:
+        if "instagram" in chosen and "instagram" not in results:
             results["instagram"] = self.publish_instagram(video_path, bundle)
 
-        # 4. Publicación en TikTok
-        if "tiktok" in chosen:
+        if "tiktok" in chosen and "tiktok" not in results:
             results["tiktok"] = self.publish_tiktok(video_path, bundle)
 
         # 5. Webhook externo si está configurado
