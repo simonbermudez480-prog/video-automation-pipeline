@@ -716,6 +716,144 @@ def _generate_dimension_and_senses_fallback_script(aspect_ratio: str = "9:16") -
     return ScriptOutput(metadata=metadata, narration_full=full_narration, scenes=scenes)
 
 
+def _is_fedex_or_casino_topic(topic: str) -> bool:
+    t = topic.lower()
+    fedex_keywords = ["fedex", "federal express", "casino", "apuesta", "blackjack", "fred smith", "5000", "5.000", "5,000"]
+    return any(k in t for k in fedex_keywords)
+
+
+def _generate_fedex_casino_fallback_script(aspect_ratio: str = "9:16") -> ScriptOutput:
+    logger.info("Cargando guion documental maestro especializado: 'El Fundador de FedEx y la Apuesta en Las Vegas' ({})", aspect_ratio)
+    if aspect_ratio == "9:16":
+        style_suffix = ", vertical 9:16 portrait orientation, mobile format, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning documentary concept art, no text, no watermark"
+    else:
+        style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning documentary concept art, no text, no watermark"
+
+    scenes_data = [
+        (
+            1,
+            "En 1973, la empresa FedEx estaba al borde de la quiebra absoluta. En su cuenta bancaria solo quedaban cinco mil dólares y necesitaban veinticuatro mil para combustible.",
+            "Tense young 1970s businessman in a vintage suit holding an empty bank statement, retro office atmosphere, moody atmospheric shadows",
+            "vintage 1970s businessman bank statement empty office"
+        ),
+        (
+            2,
+            "Fundada por Frederick Smith con su herencia familiar, Federal Express enfrentaba pérdidas mensuales de un millón de dólares debido a la brutal crisis petrolera de los años setenta.",
+            "Retro 1970s cargo airplanes parked on an empty airport tarmac at dusk, industrial hangars, moody fog and fuel trucks",
+            "1970s cargo airplanes airport tarmac fuel crisis"
+        ),
+        (
+            3,
+            "Desesperado por salvar su sueño, Fred Smith viajó a Chicago para solicitar un préstamo de emergencia a General Dynamics. La respuesta fue un rotundo y frío rechazo.",
+            "Classic 1970s corporate boardroom in Chicago, harsh direct lighting, shadowy executives turning their backs on a desperate young entrepreneur, cinematic realism",
+            "1970s corporate boardroom executives loan rejection"
+        ),
+        (
+            4,
+            "Esperando su vuelo de regreso a Memphis, Fred Smith miró el boleto en sus manos. Si volvía a casa, el lunes los aviones no podrían despegar y la empresa moriría para siempre.",
+            "Solitary man in a vintage overcoat standing in a classic 1970s airport terminal departure lounge, rain streaking down the glass windows, dramatic lighting",
+            "solitary man 1970s airport departure gate rain"
+        ),
+        (
+            5,
+            "En lugar de tomar el avión a Memphis, tomó una decisión que desafiaba toda lógica empresarial: compró un pasaje directo a la capital del juego, Las Vegas.",
+            "Vintage 1970s Las Vegas strip at night, brilliant neon signs of classic casinos glowing through the desert night, retro cars",
+            "vintage 1970s Las Vegas neon strip night casinos"
+        ),
+        (
+            6,
+            "Entró a un casino con los últimos cinco mil dólares de los fondos corporativos de Federal Express, el dinero destinado a pagar los sueldos y facturas básicas.",
+            "Glamorous 1970s vintage casino floor, green felt tables, cigarette smoke catching warm golden chandeliers, intense atmosphere",
+            "1970s casino floor blackjack table green felt chandelier"
+        ),
+        (
+            7,
+            "Se sentó en una mesa de blackjack. Si perdía esas fichas, no solo perdería su compañía, sino que podría enfrentar consecuencias legales por usar fondos de la empresa.",
+            "Dramatic macro close-up of stacks of casino chips and playing cards on green felt, sweaty nervous hands, intense chiaroscuro lighting",
+            "blackjack cards casino chips hands green felt macro"
+        ),
+        (
+            8,
+            "Mano tras mano, la tensión cortaba el aire. Contra todas las probabilidades matemáticas del casino, Smith comenzó una racha ganadora inverosímil durante todo el fin de semana.",
+            "Charismatic young man leaning over the blackjack table with focused eyes, dealers hands dealing cards, rising excitement and tension, cinematic realism",
+            "young man blackjack winning streak dealer cards 1970s"
+        ),
+        (
+            9,
+            "Para el domingo por la noche, Fred Smith había convertido aquellos cinco mil dólares desesperados en veintisiete mil dólares en efectivo.",
+            "Stack of vintage hundred dollar bills and casino cashier cage, warm vintage amber lighting, triumph and adrenaline, photorealistic",
+            "stacks of hundred dollar bills casino cashier vintage"
+        ),
+        (
+            10,
+            "El lunes por la mañana, llamó a su equipo en Memphis. Su director financiero le preguntó anonadado: '¿Nos salvaste? ¿Cómo conseguiste el dinero?'. Smith respondió: 'El combustible está pagado'.",
+            "Man in a vintage telephone booth with a rotary phone smiling with relief and determination, morning light breaking through, cinematic storytelling",
+            "vintage telephone booth rotary phone 1970s morning"
+        ),
+        (
+            11,
+            "Esos veintisiete mil dólares permitieron cargar el combustible de los aviones ese lunes, manteniendo la flota de Federal Express en el aire una semana crucial más.",
+            "Vintage cargo plane roaring down the runway at sunrise, landing gear lifting, majestic golden sunlight cutting through clouds, cinematic 8k",
+            "cargo plane taking off sunrise runway golden hour"
+        ),
+        (
+            12,
+            "Ese tiempo ganado fue el salvavidas perfecto. En los días siguientes, Fred Smith utilizó el impulso para conseguir once millones de dólares en capital de inversión.",
+            "Successful business handshake in front of massive modern aviation hangar, vintage financial contracts, bright optimistic daylight",
+            "business handshake 1970s aviation hangar contract"
+        ),
+        (
+            13,
+            "Años después, Smith admitió: 'Ninguna escuela de negocios recomendaría lo que hice, pero si no pagábamos el combustible, los aviones nunca habrían vuelto a volar'.",
+            "Modern aerial view of a massive worldwide FedEx logistics hub with dozens of cargo planes and glowing global route lines at night, epic scale",
+            "modern cargo airline logistics hub aerial global routes night"
+        ),
+        (
+            14,
+            "Hoy FedEx vale más de setenta mil millones de dólares gracias a una partida de cartas. ¿Habrías tenido el valor de apostarlo todo? Déjalo en los comentarios y suscríbete para más historias legendarias.",
+            "Dramatic juxtaposition of vintage playing cards fading into a modern global delivery fleet, inspirational golden hour glow, cinematic masterpiece",
+            "playing cards fading into delivery fleet inspiring golden hour"
+        )
+    ]
+
+    scenes = [
+        Scene(
+            scene_id=sid,
+            narration_text=text,
+            visual_prompt=prompt + style_suffix,
+            search_keywords=kw,
+        )
+        for sid, text, prompt, kw in scenes_data
+    ]
+
+    full_narration = " ".join([s.narration_text for s in scenes])
+    metadata = VideoMetadata(
+        title="El Fundador de FedEx que Apostó sus Últimos $5,000 en el Casino #Shorts",
+        description=(
+            "En 1973, Federal Express (FedEx) estaba quebrada. Solo quedaban $5,000 en el banco y no tenían para pagar el combustible de los aviones. "
+            "En lugar de rendirse, su fundador Fred Smith voló a Las Vegas y se sentó en una mesa de Blackjack. "
+            "Descubre la jugada más arriesgada en la historia de los negocios.\n\n"
+            "🔔 Suscríbete para conocer las historias más increíbles y audaces de emprendimiento e historia.\n"
+            "#FedEx #FredSmith #Emprendimiento #Negocios #HistoriasReales #Shorts #Blackjack"
+        ),
+        tags=[
+            "FedEx",
+            "Fred Smith",
+            "Las Vegas",
+            "Blackjack",
+            "Emprendimiento",
+            "Negocios",
+            "Historias Reales",
+            "Casino",
+            "Historia",
+            "Documental",
+            "Shorts",
+            "Curiosidades",
+        ],
+    )
+    return ScriptOutput(metadata=metadata, narration_full=full_narration, scenes=scenes)
+
+
 def _generate_fallback_script(topic: str, duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> ScriptOutput:
     """
     Genera un guion documental profundo y completo de escenas cortas
@@ -727,6 +865,8 @@ def _generate_fallback_script(topic: str, duration_minutes: float, target_words:
         return _generate_quantum_fallback_script(aspect_ratio=aspect_ratio)
     elif _is_dimension_or_senses_topic(topic):
         return _generate_dimension_and_senses_fallback_script(aspect_ratio=aspect_ratio)
+    elif _is_fedex_or_casino_topic(topic):
+        return _generate_fedex_casino_fallback_script(aspect_ratio=aspect_ratio)
     else:
         return _generate_dynamic_topic_fallback(topic, duration_minutes, target_words, num_scenes, aspect_ratio=aspect_ratio)
 

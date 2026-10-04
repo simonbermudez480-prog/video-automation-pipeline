@@ -286,18 +286,59 @@ def _fetch_from_picsum(prompt: str, output_path: Path, scene_id: int, aspect_rat
     target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
     logger.info("Descargando fotografía documental real {}x{} (Picsum HD)...", target_w, target_h)
     seed = f"docu_scene_{scene_id}_{abs(hash(prompt)) % 100000}"
-    url = f"https://picsum.photos/seed/{seed}/{target_w}/{target_h}"
+    candidate_urls = [
+        f"https://picsum.photos/seed/{seed}/{target_w}/{target_h}",
+        f"https://picsum.photos/{target_w}/{target_h}?random={scene_id}",
+    ]
 
+    for url in candidate_urls:
+        try:
+            resp = requests.get(url, headers=BROWSER_HEADERS, timeout=15)
+            if resp.status_code == 200 and len(resp.content) > 10000:
+                output_path.write_bytes(resp.content)
+                _normalize_image_to_resolution(output_path, aspect_ratio)
+                logger.success("Fotografía real {}x{} descargada con éxito: {}", target_w, target_h, output_path.name)
+                return True
+        except Exception as e:
+            logger.warning("Fallo en intento Picsum HD ({}): {}", url, e)
+    return False
+
+
+def _generate_procedural_fallback_image(scene_id: int, prompt: str, output_path: Path, aspect_ratio: str = "16:9") -> bool:
+    """
+    Genera un fondo visual cinemático procedural de alta resolución (gradiente documental + viñeta)
+    como red de seguridad absoluta cuando ningún repositorio externo responde.
+    """
     try:
-        resp = requests.get(url, headers=BROWSER_HEADERS, timeout=15)
-        if resp.status_code == 200 and len(resp.content) > 10000:
-            output_path.write_bytes(resp.content)
-            _normalize_image_to_resolution(output_path, aspect_ratio)
-            logger.success("Fotografía real {}x{} descargada con éxito: {}", target_w, target_h, output_path.name)
-            return True
-        return False
+        from PIL import Image, ImageDraw
+        target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
+        img = Image.new("RGB", (target_w, target_h), (12, 16, 24))
+        draw = ImageDraw.Draw(img)
+
+        # Paletas documentales oscuras y elegantes según el ID de la escena
+        color_palettes = [
+            ((15, 23, 42), (30, 41, 59)),    # Slate dark
+            ((24, 24, 27), (39, 39, 42)),    # Zinc dark
+            ((10, 18, 30), (20, 35, 60)),    # Deep ocean
+            ((28, 15, 19), (45, 20, 25)),    # Dark mahogany
+            ((18, 22, 25), (32, 44, 48)),    # Deep teal
+            ((25, 20, 15), (42, 32, 22)),    # Amber bronze dark
+        ]
+        top_col, bot_col = color_palettes[scene_id % len(color_palettes)]
+
+        for y in range(target_h):
+            factor = y / float(target_h)
+            r = int(top_col[0] * (1 - factor) + bot_col[0] * factor)
+            g = int(top_col[1] * (1 - factor) + bot_col[1] * factor)
+            b = int(top_col[2] * (1 - factor) + bot_col[2] * factor)
+            draw.line([(0, y), (target_w, y)], fill=(r, g, b))
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(output_path, format="PNG")
+        logger.warning("Fondo cinemático procedural generado como salvaguarda para escena #{:03d}: {}", scene_id, output_path.name)
+        return True
     except Exception as e:
-        logger.warning("Error en Picsum HD: {}", e)
+        logger.error("Error al generar fondo procedural: {}", e)
         return False
 
 
@@ -360,6 +401,10 @@ def generate_single_image(
 
     # 6. Repositorio de Fotografía Documental Real Picsum HD (1920x1080 o 1080x1920)
     if _fetch_from_picsum(prompt, output_path, scene_id, aspect_ratio=aspect_ratio):
+        return True
+
+    # 7. Red de seguridad cinemática procedural (garantiza que siempre exista frame válido)
+    if _generate_procedural_fallback_image(scene_id, prompt, output_path, aspect_ratio=aspect_ratio):
         return True
 
     return False
@@ -439,7 +484,11 @@ def generate_images_for_scenes(
                 aspect_ratio=aspect_ratio,
             )
             if not success or not s_path.exists():
-                raise RuntimeError(f"Fallo crítico al obtener imagen real para la escena #{s_idx}")
+                logger.warning("Generando salvaguarda procedural para Escena #{:03d}...", s_idx)
+                _generate_procedural_fallback_image(s_scene.scene_id, s_scene.visual_prompt, s_path, aspect_ratio=aspect_ratio)
+
+            if not s_path.exists():
+                raise RuntimeError(f"Fallo crítico al obtener imagen para la escena #{s_idx}")
             return s_idx, s_path
 
         with ThreadPoolExecutor(max_workers=workers) as executor:

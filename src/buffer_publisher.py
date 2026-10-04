@@ -20,49 +20,140 @@ from src.social_copywriter import SocialBundle
 BUFFER_GRAPHQL_ENDPOINT = "https://api.buffer.com"
 
 
+import subprocess
+
+def _get_upload_ready_video(video_path: Path) -> Path:
+    """
+    Si el video supera los 22 MB, genera una versión ligera en 720x1280 (vertical)
+    manteniendo la relación de aspecto 9:16 y subtítulos legibles para asegurar
+    una subida rápida y evitar timeouts de red.
+    """
+    size_mb = video_path.stat().st_size / (1024 * 1024)
+    if size_mb <= 22:
+        return video_path
+
+    opt_path = video_path.parent / f"{video_path.stem}_web.mp4"
+    if opt_path.exists() and opt_path.stat().st_size > 1000:
+        return opt_path
+
+    logger.info("Optimizando peso del video ({:.2f} MB) para transferencia fluida hacia Buffer...", size_mb)
+    cmd = [
+        "ffmpeg", "-y", "-i", str(video_path),
+        "-vf", "scale=720:1280",
+        "-c:v", "libx264", "-crf", "26", "-preset", "fast",
+        "-c:a", "aac", "-b:a", "96k",
+        str(opt_path)
+    ]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if res.returncode == 0 and opt_path.exists():
+            new_mb = opt_path.stat().st_size / (1024 * 1024)
+            logger.success("Video optimizado para entrega web: {:.2f} MB ({:.1f}% menor)", new_mb, (1 - new_mb / size_mb) * 100)
+            return opt_path
+    except Exception as e:
+        logger.warning("No se pudo comprimir video para subida: {}", e)
+
+    return video_path
+
+
+def _upload_to_github_cdn(target_path: Path) -> Optional[str]:
+    """
+    Sube el video al repositorio público 'video-assets' de GitHub usando 'gh' CLI
+    para obtener una URL directa de raw.githubusercontent.com con CDN global de alta velocidad,
+    la cual es aceptada por Buffer al 100% sin bloqueos de raspadores ni caídas de servidores temporales.
+    """
+    try:
+        import shutil
+        gh_path = shutil.which("gh")
+        if not gh_path:
+            return None
+
+        cdn_dir = settings.TEMP_DIR / "video_assets_cdn"
+        if not cdn_dir.exists():
+            res_clone = subprocess.run(
+                ["gh", "repo", "clone", "simonbermudez480-prog/video-assets", str(cdn_dir)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            if res_clone.returncode != 0 and not cdn_dir.exists():
+                return None
+        else:
+            subprocess.run(["git", "-C", str(cdn_dir), "pull", "origin", "main"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        dest_filename = f"{target_path.stem}.mp4"
+        dest_file = cdn_dir / dest_filename
+        shutil.copy2(target_path, dest_file)
+
+        subprocess.run(["git", "-C", str(cdn_dir), "add", dest_filename], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "-C", str(cdn_dir), "commit", "-m", f"Upload {dest_filename} for Buffer delivery"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        push_res = subprocess.run(["git", "-C", str(cdn_dir), "push", "origin", "main"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        if push_res.returncode == 0:
+            direct_url = f"https://raw.githubusercontent.com/simonbermudez480-prog/video-assets/main/{dest_filename}"
+            logger.success("Video hosteado en GitHub CDN para Buffer: {}", direct_url)
+            return direct_url
+    except Exception as e:
+        logger.warning("Fallo al alojar en GitHub CDN (intentando alternativa): {}", e)
+
+    return None
+
+
 def upload_video_to_public_host(video_path: Path) -> str:
     """
     Sube el video a un servicio de almacenamiento temporal público con HTTPS directo,
     cumpliendo con el requerimiento de Buffer de acceder al archivo vía URL.
     """
-    logger.info("Alojando video temporalmente ({:.2f} MB) para entrega a Buffer...", video_path.stat().st_size / (1024 * 1024))
-    
+    target_path = _get_upload_ready_video(video_path)
+    logger.info("Alojando video ({:.2f} MB) para entrega a Buffer...", target_path.stat().st_size / (1024 * 1024))
+
+    # 1. Intento primario: GitHub CDN oficial del usuario (100% compatible con Buffer, sin bloqueos)
+    gh_url = _upload_to_github_cdn(target_path)
+    if gh_url:
+        return gh_url
+
     ua_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    # 1. Intento primario: Litterbox (catbox.moe con retención de 24 horas)
+    # 2. Intento secundario: Litterbox (catbox.moe con retención de 24 horas)
     try:
-        with open(video_path, "rb") as f:
+        logger.info("Enviando archivo a Litterbox (24h)...")
+        with open(target_path, "rb") as f:
             data = {"reqtype": "fileupload", "time": "24h"}
-            files = {"fileToUpload": (video_path.name, f, "video/mp4")}
+            files = {"fileToUpload": (f"{target_path.stem}.mp4", f, "video/mp4")}
             resp = requests.post(
                 "https://litterbox.catbox.moe/resources/internals/api.php",
                 data=data,
                 files=files,
                 headers=ua_headers,
-                timeout=90
+                timeout=300
             )
         if resp.status_code == 200 and resp.text.startswith("http"):
             direct_url = resp.text.strip()
-            logger.success("Video hosteado temporalmente en: {}", direct_url)
+            logger.success("Video hosteado temporalmente en Litterbox: {}", direct_url)
             return direct_url
     except Exception as e:
         logger.warning("Fallo al subir a Litterbox: {}. Intentando alternativa...", e)
 
-    # 2. Intento secundario: Tmpfiles
+    # 3. Intento terciario: Tempfile CDN
     try:
-        with open(video_path, "rb") as f:
-            resp = requests.post("https://tmpfiles.org/api/v1/upload", files={"file": f}, timeout=90)
+        logger.info("Enviando archivo a Tempfile CDN...")
+        with open(target_path, "rb") as f:
+            resp = requests.post(
+                "https://tempfile.org/api/upload/local",
+                files={"files": (f"{target_path.stem}.mp4", f, "video/mp4")},
+                timeout=300
+            )
         if resp.status_code == 200:
             data = resp.json()
-            raw_url = data.get("data", {}).get("url", "")
-            if raw_url:
-                direct_url = raw_url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
-                logger.success("Video hosteado temporalmente en: {}", direct_url)
+            if data.get("success") and data.get("files"):
+                fid = data["files"][0]["id"]
+                direct_url = f"https://tempfile.org/{fid}/download?name=video.mp4"
+                logger.success("Video hosteado en Tempfile CDN: {}", direct_url)
                 return direct_url
     except Exception as e:
-        logger.warning("Fallo al subir a Tmpfiles: {}", e)
+        logger.warning("Fallo al subir a Tempfile CDN: {}", e)
 
     raise RuntimeError("No fue posible alojar el video en un servidor temporal público para Buffer.")
 
