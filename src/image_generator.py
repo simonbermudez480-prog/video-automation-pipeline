@@ -35,9 +35,10 @@ BROWSER_HEADERS = {
 }
 
 
-def _generate_with_google_imagen(prompt: str, output_path: Path) -> bool:
-    """Genera imagen 16:9 usando Google Imagen 3."""
-    logger.info("Generando imagen con Google Imagen 3...")
+def _generate_with_google_imagen(prompt: str, output_path: Path, aspect_ratio: str = "16:9") -> bool:
+    """Genera imagen en resolución nativa 16:9 o 9:16 usando Google Imagen 3."""
+    valid_ratio = "9:16" if aspect_ratio == "9:16" else "16:9"
+    logger.info("Generando imagen con Google Imagen 3 (Formato: {})...", valid_ratio)
     try:
         from google import genai
         from google.genai import types
@@ -50,7 +51,7 @@ def _generate_with_google_imagen(prompt: str, output_path: Path) -> bool:
             prompt=prompt,
             config=types.GenerateImagesConfig(
                 number_of_images=1,
-                aspect_ratio="16:9",
+                aspect_ratio=valid_ratio,
                 output_mime_type="image/png",
             ),
         )
@@ -66,9 +67,10 @@ def _generate_with_google_imagen(prompt: str, output_path: Path) -> bool:
         return False
 
 
-def _generate_with_fal(prompt: str, output_path: Path) -> bool:
-    """Genera imagen 16:9 usando Fal.ai (Flux Schnell)."""
-    logger.info("Generando imagen con Fal.ai Flux...")
+def _generate_with_fal(prompt: str, output_path: Path, aspect_ratio: str = "16:9") -> bool:
+    """Genera imagen usando Fal.ai (Flux Schnell) en 16:9 o 9:16."""
+    fal_size = "portrait_16_9" if aspect_ratio == "9:16" else "landscape_16_9"
+    logger.info("Generando imagen con Fal.ai Flux (Formato: {})...", fal_size)
     url = "https://fal.run/fal-ai/flux/schnell"
     headers = {
         "Authorization": f"Key {settings.IMAGE_API_KEY}",
@@ -76,7 +78,7 @@ def _generate_with_fal(prompt: str, output_path: Path) -> bool:
     }
     payload = {
         "prompt": prompt,
-        "image_size": "landscape_16_9",
+        "image_size": fal_size,
         "num_inference_steps": 4,
         "enable_safety_checker": True,
     }
@@ -139,16 +141,58 @@ def _extract_keywords_from_prompt(prompt: str) -> str:
     return " ".join(words[:5]) or "history documentary"
 
 
-def _generate_with_pollinations_flux(prompt: str, output_path: Path, aspect_ratio: str = "16:9") -> bool:
+def _build_cohesive_prompt(
+    base_prompt: str,
+    visual_contract: Optional[object] = None,
+    shot_type: Optional[str] = None,
+    aspect_ratio: str = "9:16",
+) -> str:
+    """
+    Combina el prompt de la escena con la biblia visual global (VisualContract)
+    garantizando coherencia de paleta, iluminación y estilo cinematográfico.
+    """
+    if not visual_contract:
+        return base_prompt
+
+    style_anchor = getattr(visual_contract, "art_style", "")
+    palette = getattr(visual_contract, "color_palette", "")
+    lighting = getattr(visual_contract, "lighting_atmosphere", "")
+    era = getattr(visual_contract, "era_setting", "")
+
+    components = [base_prompt.rstrip(". ")]
+    if era and era.lower() not in base_prompt.lower():
+        components.append(f"Era: {era}")
+    if shot_type and shot_type.replace("_", " ") not in base_prompt.lower():
+        components.append(f"Cinematography: {shot_type.replace('_', ' ')}")
+    if style_anchor and style_anchor.lower() not in base_prompt.lower():
+        components.append(f"Aesthetic: {style_anchor}")
+    if palette and palette.lower() not in base_prompt.lower():
+        components.append(f"Color palette: {palette}")
+    if lighting and lighting.lower() not in base_prompt.lower():
+        components.append(f"Lighting: {lighting}")
+
+    ratio_tag = "vertical 9:16 portrait composition, mobile safe zone" if aspect_ratio == "9:16" else "cinematic 16:9 widescreen"
+    components.append(f"{ratio_tag}, authentic documentary film still, fine grain, no text, no captions, no watermark")
+
+    return ". ".join(components)
+
+
+def _generate_with_pollinations_flux(
+    prompt: str,
+    output_path: Path,
+    aspect_ratio: str = "16:9",
+    seed: Optional[int] = None,
+) -> bool:
     """
     Intenta generar imagen cinemática vía Pollinations AI:
-    Soporta clave de API para modelos premium y fallback a modelo estándar en 16:9 o 9:16.
+    Soporta clave de API para modelos premium y fallback a modelo estándar en 16:9 o 9:16 con semilla consistente.
     """
-    clean_prompt = re.sub(r"[^\w\s,.-]", "", prompt)
-    clean_prompt = " ".join(clean_prompt.split()[:25])
+    clean_prompt = re.sub(r"[^\w\s,.:;-]", " ", prompt)
+    clean_prompt = " ".join(clean_prompt.split()[:65])
     encoded = urllib.parse.quote(clean_prompt)
 
     target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
+    seed_param = f"&seed={seed}" if seed is not None else ""
 
     api_key = getattr(settings, "POLLINATIONS_API_KEY", "") or (
         settings.IMAGE_API_KEY if settings.IMAGE_API_KEY and not settings.IMAGE_API_KEY.startswith("tu_clave") else ""
@@ -157,13 +201,13 @@ def _generate_with_pollinations_flux(prompt: str, output_path: Path, aspect_rati
     headers = dict(BROWSER_HEADERS)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-        url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width={target_w}&height={target_h}&nologo=true"
+        url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width={target_w}&height={target_h}{seed_param}&nologo=true"
     else:
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width={target_w}&height={target_h}&nologo=true"
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width={target_w}&height={target_h}{seed_param}&nologo=true"
 
     try:
-        logger.info("Intentando generación vía Pollinations ({}) [{}]...", aspect_ratio, f"{target_w}x{target_h}")
-        resp = requests.get(url, headers=headers, timeout=18)
+        logger.info("Intentando generación vía Pollinations ({}) [{}] (seed: {})...", aspect_ratio, f"{target_w}x{target_h}", seed or "auto")
+        resp = requests.get(url, headers=headers, timeout=22)
         if resp.status_code == 200 and len(resp.content) > 10000:
             output_path.write_bytes(resp.content)
             _normalize_image_to_resolution(output_path, aspect_ratio)
@@ -349,19 +393,28 @@ def generate_single_image(
     provider: Optional[str] = None,
     keywords: Optional[str] = None,
     aspect_ratio: str = "16:9",
+    visual_contract: Optional[object] = None,
+    shot_type: Optional[str] = None,
+    topic_seed: Optional[int] = None,
 ) -> bool:
     """
-    Genera u obtiene una imagen real (16:9 o 9:16) mediante una cascada inteligente de calidad y contexto.
-    Nunca produce fondos de color plano.
+    Genera u obtiene una imagen real (16:9 o 9:16) mediante una cascada inteligente de calidad y contexto,
+    reforzada con la biblia visual global (VisualContract) para asegurar máxima coherencia.
     """
     selected_provider = (provider or settings.IMAGE_PROVIDER).lower()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 0. Enriquecer el prompt con el contrato visual si está presente
+    cohesive_prompt = _build_cohesive_prompt(prompt, visual_contract, shot_type=shot_type, aspect_ratio=aspect_ratio)
+    
+    # Semilla determinista por escena para coherencia estética y de ruido
+    scene_seed = (topic_seed + scene_id * 31) if topic_seed is not None else None
 
     # 1. Fal.ai Flux-Schnell (si hay API Key de Fal o se selecciona fal)
     if selected_provider == "fal" or (
         settings.IMAGE_API_KEY and settings.IMAGE_API_KEY.startswith("fal_")
     ):
-        if _generate_with_fal(prompt, output_path):
+        if _generate_with_fal(cohesive_prompt, output_path, aspect_ratio=aspect_ratio):
             _normalize_image_to_resolution(output_path, aspect_ratio)
             return True
 
@@ -369,11 +422,11 @@ def generate_single_image(
     if selected_provider == "imagen" or (
         settings.IMAGE_API_KEY and "AIza" in settings.IMAGE_API_KEY
     ):
-        if _generate_with_google_imagen(prompt, output_path):
+        if _generate_with_google_imagen(cohesive_prompt, output_path, aspect_ratio=aspect_ratio):
             _normalize_image_to_resolution(output_path, aspect_ratio)
             return True
 
-    # 3. Pollinations (IA generativa gratuita o con clave en 16:9 o 9:16)
+    # 3. Pollinations (IA generativa gratuita o con clave en 16:9 o 9:16 con semilla consistente)
     has_combat_keywords = False
     has_custom_key = bool(
         getattr(settings, "POLLINATIONS_API_KEY", "")
@@ -384,11 +437,11 @@ def generate_single_image(
             r"\bwar\b", r"\bbattle\b", r"\bsoldier\b", r"\barmy\b", r"\bhitler\b", r"\bnazi\b",
             r"\binvasion\b", r"\bmilitary\b", r"\bcombat\b", r"\bbomb\b", r"\bstalingrad\b", r"\bnormandy\b"
         ]
-        p_check = (prompt + " " + (keywords or "")).lower()
+        p_check = (cohesive_prompt + " " + (keywords or "")).lower()
         has_combat_keywords = any(bool(re.search(term, p_check)) for term in combat_terms)
 
     if not has_combat_keywords:
-        if _generate_with_pollinations_flux(prompt, output_path, aspect_ratio=aspect_ratio):
+        if _generate_with_pollinations_flux(cohesive_prompt, output_path, aspect_ratio=aspect_ratio, seed=scene_seed):
             return True
 
     # 4. NASA Deep Space Archive (fotografías espaciales reales, si es tema astronómico o cosmológico)
@@ -417,11 +470,13 @@ def generate_images_for_scenes(
     provider: Optional[str] = None,
     topic: Optional[str] = None,
     aspect_ratio: str = "16:9",
+    visual_contract: Optional[object] = None,
 ) -> List[Path]:
     """
     Itera sobre la lista de escenas del guion y descarga concurrentemente
     cada imagen real en assets/images/scene_{idx:03d}.png en formato 16:9 o 9:16.
     Invalida automáticamente la caché si el tema o el aspect ratio cambiaron respecto a la ejecución anterior.
+    Aplica la biblia visual (VisualContract) para asegurar coherencia entre escenas.
     """
     target_dir = output_dir or settings.IMAGES_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -463,16 +518,19 @@ def generate_images_for_scenes(
             pending_items.append((idx, scene, img_path))
 
     if pending_items:
-        logger.info("Adquiriendo concurrentemente {} imágenes requeridas...", len(pending_items))
+        logger.info("Adquiriendo concurrentemente {} imágenes requeridas con estilo cinemático coherente...", len(pending_items))
+        base_seed = abs(hash(topic.lower().strip())) % 500000 if topic else 12345
 
         def _fetch_worker(item):
             s_idx, s_scene, s_path = item
+            shot_type = getattr(s_scene, "shot_type", "detail_macro")
             logger.info(
-                "[{}/{}] Adquiriendo imagen para Escena #{:03d} ({}): '{}...'",
+                "[{}/{}] Adquiriendo imagen Escena #{:03d} ({}, Plano: '{}'): '{}...'",
                 s_idx,
                 total,
                 s_scene.scene_id,
                 aspect_ratio,
+                shot_type,
                 s_scene.visual_prompt[:60],
             )
             success = generate_single_image(
@@ -482,6 +540,9 @@ def generate_images_for_scenes(
                 provider=provider,
                 keywords=s_scene.search_keywords,
                 aspect_ratio=aspect_ratio,
+                visual_contract=visual_contract,
+                shot_type=shot_type,
+                topic_seed=base_seed,
             )
             if not success or not s_path.exists():
                 logger.warning("Generando salvaguarda procedural para Escena #{:03d}...", s_idx)
@@ -499,6 +560,6 @@ def generate_images_for_scenes(
 
     # Reconstruir en orden secuencial estricto
     image_paths = [image_paths_dict[i] for i in range(1, total + 1)]
-    logger.success("Las {} imágenes reales ({}) fueron adquiridas exitosamente.", len(image_paths), aspect_ratio)
+    logger.success("Las {} imágenes reales ({}) fueron adquiridas exitosamente con coherencia visual.", len(image_paths), aspect_ratio)
     return image_paths
 

@@ -23,15 +23,41 @@ class VideoMetadata(BaseModel):
     tags: List[str] = Field(description="Lista de 10 a 20 etiquetas relevantes para posicionamiento en YouTube")
 
 
+class VisualContract(BaseModel):
+    era_setting: str = Field(
+        description="Contexto histórico, temporal y espacial coherente (ej: 'Early 1970s, Pacific Northwest, commercial aviation')"
+    )
+    art_style: str = Field(
+        description="Estilo cinematográfico fotográfico auténtico adecuado a la época (ej: 'Cinematic 35mm documentary film still, Kodak Vision3 500T texture, fine realistic film grain, Panavision anamorphic lens, moody shadows, realistic photography, no CGI look, no cartoon')"
+    )
+    color_palette: str = Field(
+        description="Paleta cromática uniforme de 2 a 3 tonos dominantes compartida por todas las escenas (ej: 'Muted slate teal, warm tungsten cabin light, rain-soaked asphalt gray')"
+    )
+    lighting_atmosphere: str = Field(
+        description="Atmósfera de iluminación envolvente y coherente (ej: 'Low-key atmospheric lighting, diffused storm illumination, high contrast specular highlights')"
+    )
+    character_anchor: Optional[str] = Field(
+        default=None,
+        description="Descripción canónica y fija del personaje o sujeto principal para mantener consistencia de vestuario y rasgos"
+    )
+    shot_progression_rules: str = Field(
+        description="Reglas de dirección cinematográfica para evitar face-morphing (priorizar planos detalle, macro, siluetas, tomas over-the-shoulder y tomas de ambiente)"
+    )
+
+
 class Scene(BaseModel):
     scene_id: int = Field(description="Número de escena secuencial (1, 2, 3...)")
     narration_text: str = Field(description="Texto exacto a ser narrado para esta escena (1 a 2 oraciones, 20 a 35 palabras)")
+    shot_type: Optional[str] = Field(
+        default="detail_macro",
+        description="Tipo de plano cinemático: 'macro_detail' (manos, notas, objetos clave), 'over_the_shoulder', 'silhouette_backlight', 'environmental_wide', 'dramatic_close_up', 'medium_action'"
+    )
     visual_prompt: str = Field(
-        description="Prompt en inglés detallado para generador de imágenes: estilo cinematográfico documental, 16:9, iluminación dramática, 8k, sin texto"
+        description="Prompt en inglés ultra-específico describiendo la acción física exacta y sujeto focal de ese momento, sin texto ni marcas de agua"
     )
     search_keywords: Optional[str] = Field(
         default=None,
-        description="Términos de búsqueda visual en inglés (3 a 6 palabras) para archivo documental o histórico"
+        description="Términos de búsqueda visual en inglés (3 a 6 palabras) para archivo documental o histórico si corresponde"
     )
     start_time: Optional[float] = Field(default=None, description="Segundo de inicio en la línea de tiempo")
     end_time: Optional[float] = Field(default=None, description="Segundo de finalización en la línea de tiempo")
@@ -40,41 +66,58 @@ class Scene(BaseModel):
 
 class ScriptOutput(BaseModel):
     metadata: VideoMetadata
+    visual_contract: Optional[VisualContract] = Field(
+        default=None,
+        description="Contrato de estilo visual y biblia de coherencia cinematográfica para todo el video"
+    )
     narration_full: str = Field(description="Guion completo concatenado para narración continua")
-    scenes: List[Scene] = Field(description="Lista de escenas ordenadas secuencialmente (entre 15 y 25 escenas)")
+    scenes: List[Scene] = Field(description="Lista de escenas ordenadas secuencialmente")
 
 
 def _build_system_prompt(duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> str:
     is_vertical = aspect_ratio == "9:16"
     format_desc = "VERTICAL 9:16 (Shorts/Reels/TikTok)" if is_vertical else "PANORÁMICO 16:9 (Documental horizontal)"
     ratio_guidance = (
-        "Es un video VERTICAL 9:16 para smartphones (TikTok/Shorts/Reels). La composición visual de cada escena debe ser en orientación vertical ('portrait orientation, vertical 9:16 mobile format'), con el sujeto focal perfectamente centrado en el tercio medio."
+        "Es un video VERTICAL 9:16 para smartphones (TikTok/Shorts/Reels). Cada escena debe ser concebida en orientación vertical ('portrait orientation, vertical 9:16 mobile format'), con el sujeto focal perfectamente encuadrado en el tercio superior o medio para no ser tapado por los subtítulos inferiores."
         if is_vertical
         else "Es un video PANORÁMICO 16:9 cinematográfico."
     )
-    style_tag = (
-        "vertical 9:16 portrait orientation, mobile format, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
-        if is_vertical
-        else "cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
-    )
 
-    return f"""Eres un director audiovisual de documentales científicos e históricos de élite (estilo BBC, Netflix, National Geographic) y estratega de alta retención en YouTube y redes sociales de video vertical.
-Tu objetivo es producir un guion completo para un video documental {format_desc} de aproximadamente {duration_minutes:.1f} minutos de duración.
+    return f"""Eres un Director de Cine y Documentales de Prestigio (estilo David Fincher, Christopher Nolan, HBO Documentaries) y Director de Fotografía experto en retención visual.
+Tu misión es diseñar un guion audiovisual {format_desc} de ~{duration_minutes:.1f} minutos, estableciendo una BIBLIA DE COHERENCIA VISUAL ('visual_contract') y escenas cinematográficas con tensión dramática.
 
-Formato y composición visual: {ratio_guidance}
-
-Parámetros clave de producción:
+PARÁMETROS DE PRODUCCIÓN NARRATIVA:
 1. Longitud total: Alrededor de {target_words} palabras narradas (ritmo cautivador de ~140 palabras por minuto).
-2. División en escenas: Debes dividir el guion en EXACTAMENTE entre {max(3, num_scenes - 1)} y {num_scenes + 1} escenas cortas y dinámicas.
-3. Cada escena debe contener entre 20 y 35 palabras (equivalente a 6 a 12 segundos de locución por escena).
+2. División en escenas: EXACTAMENTE entre {max(3, num_scenes - 1)} y {num_scenes + 1} escenas.
+3. Cada escena contiene entre 20 y 35 palabras (~6 a 12 segundos de locución por escena).
 4. El guion debe estar redactado en español neutro, apasionante, riguroso y con giros que mantengan al espectador pegado a la pantalla.
 5. 'narration_full' debe ser exactamente la concatenación de todas las escenas en orden.
-6. Para cada escena, escribe un 'visual_prompt' en inglés extraordinariamente detallado para un modelo generativo en formato {aspect_ratio}:
-   - Debe describir con riqueza el sujeto visual, perspectiva de cámara, colores, ambiente y composición adaptada al formato {aspect_ratio}.
-   - Es OBLIGATORIO incluir textualmente los siguientes términos de estilo: "{style_tag}".
-7. Para cada escena, incluye 'search_keywords' con 3 a 6 términos clave en inglés que resuman el sujeto exacto para consulta en archivos históricos o científicos.
-8. Metadatos optimizados para YouTube: Título con alto gancho emocional y de curiosidad (añade '#Shorts' si el formato es 9:16), descripción completa y lista de tags de alto volumen.
-9. Dicción y términos extranjeros: El texto narrado debe sonar fluido y natural al ser leído en voz alta por un locutor hispanohablante. Para conceptos técnicos, científicos o militares, prioriza términos en español natural cuando existan. Si usas nombres propios extranjeros indispensables (ej. 'Pearl Harbor', 'Winston Churchill', 'Blitzkrieg'), asegúrate de que encajen con cadencia rítmica limpia y natural dentro de la oración.
+
+DIRECTRICES DE COHERENCIA VISUAL (VISUAL CONTRACT & ANTI-FACE-MORPHING):
+6. 'visual_contract': Define primero la biblia visual obligatoria para TODO el video:
+   - 'era_setting': Época histórica y ambientación espacial coherente con el tema.
+   - 'art_style': Estilo cinematográfico fotográfico auténtico adecuado al tema (ej: para historia usar 'Cinematic 35mm documentary film still, Kodak Vision3 500T, fine realistic grain, Panavision anamorphic lens, moody shadows, realistic photography'; NUNCA usar 'unreal engine 5', 'sci-fi concept art' ni videojuegos para hechos históricos reales).
+   - 'color_palette': Paleta de 2 o 3 colores dominantes para unificar todas las escenas (ej: 'Muted slate teal, warm tungsten amber, moody charcoal black').
+   - 'lighting_atmosphere': Iluminación envolvente consistente (ej: 'Low-key atmospheric lighting, diffused rain highlights, soft haze').
+   - 'character_anchor': Si hay un protagonista (ej: D.B. Cooper, emperador, científico), define su descripción canónica exacta (vestimenta, peinado, accesorios distintivos).
+   - 'shot_progression_rules': Regla estricta de dirección para evitar rostros mutantes.
+
+7. REGLA DE ORO DE PLANOS DETALLE (ANTI FACE-MORPHING):
+   - NUNCA repitas retratos genéricos del rostro de frente del protagonista en múltiples escenas, ya que la IA cambiará sus facciones y destruirá la inmersión.
+   - Aplica dirección cinematográfica de misterio y prestigio:
+     * 'macro_detail': Planos detalle de manos, notas escritas, dinero, relojes, instrumentos, mapas, huellas, objetos clave en tensión.
+     * 'over_the_shoulder': Planos desde la espalda del sujeto observando la escena.
+     * 'silhouette_backlight': Silueta del sujeto a contraluz contra una ventana o foco de luz.
+     * 'environmental_wide': Planos de ambiente amplios (un avión en la pista bajo tormenta, una oficina desierta de noche).
+     * 'dramatic_close_up': Solo cuando sea un objeto, mirada en sombra o detalle extremo.
+
+8. Para cada escena, escribe un 'visual_prompt' en inglés ultra-específico:
+   - Describe la ACCIÓN FÍSICA EXACTA que se está relatando en esa escena específica (no conceptos abstractos).
+   - Debe alinearse estrictamente con el 'visual_contract' y especificar el ángulo de cámara ('shot_type').
+   - Formato {aspect_ratio}: {'vertical 9:16 portrait composition, mobile safe zone' if is_vertical else 'cinematic 16:9 widescreen'}.
+   - Termina siempre especificando: 'cinematic film still, photorealistic, 8k, no text, no watermark, no captions'.
+9. Para cada escena, incluye 'search_keywords' con 3 a 6 términos clave en inglés para archivo documental o histórico.
+10. Metadatos optimizados para YouTube: Título con alto gancho emocional (añade '#Shorts' si es 9:16), descripción completa y tags relevantes.
 """
 
 

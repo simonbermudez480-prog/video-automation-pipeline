@@ -241,6 +241,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             provider=args.image_provider,
             topic=topic,
             aspect_ratio=aspect_ratio,
+            visual_contract=getattr(script_data, "visual_contract", None),
         )
         for img in image_paths:
             try:

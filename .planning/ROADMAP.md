@@ -53,4 +53,11 @@
   - Optimización de Edge-TTS con voz conversacional dinámica (`es-MX-DaliaNeural`) y aceleración de cadencia TikTok a `+10%`.
   - Cadena de masterización acústica por hardware/FFmpeg: High-Pass (80Hz), Boost de presencia en medios/agudos (+2.5dB @ 3.5kHz), compresión dinámica (3:1 @ -18dB) y normalización EBU R128 (-14 LUFS para TikTok/Shorts/Reels).
   - CLI unificada en `main.py` con `--tts-provider {gemini, elevenlabs, edge-tts}` y `--tts-voice <nombre_voz>`.
-  - Verificación completa con `faster-whisper` para subtítulos Ground-Truth y montaje sincronizado.
+- [x] **Phase 10: Visual Coherence & Cinematic Style Matrix (Global Style DNA & Detail-Shot Engine)**
+  - Implementación del modelo estructurado `VisualContract` (`era_setting`, `art_style`, `color_palette`, `lighting_atmosphere`, `character_anchor`, `shot_progression_rules`).
+  - Rediseño de prompts de dirección de fotografía en `src/script_generator.py`: eliminación de etiquetas genéricas 'sci-fi' y adopción de film photography 35mm (Kodak Vision3 500T).
+  - Regla estricta Anti Face-Morphing: categorización de planos por escena (`shot_type`: `macro_detail`, `over_the_shoulder`, `silhouette_backlight`, `environmental_wide`) para evitar inconsistencias en personajes.
+  - Implementación de `_build_cohesive_prompt` en `src/image_generator.py` para fusionar dinámicamente la biblia visual con cada escena.
+  - Ampliación de capacidad de prompt en Pollinations (hasta 65 palabras) y soporte de semillas deterministas encadenadas por tema para coherencia de textura y grano.
+  - Soporte dinámico para `aspect_ratio="9:16"` en Google Imagen 3 y Fal.ai Flux.
+  - Conexión completa en `main.py` pasando `visual_contract` desde el guion hasta el orquestador de imágenes.
