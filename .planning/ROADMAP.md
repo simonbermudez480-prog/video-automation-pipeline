@@ -61,3 +61,11 @@
   - Ampliación de capacidad de prompt en Pollinations (hasta 65 palabras) y soporte de semillas deterministas encadenadas por tema para coherencia de textura y grano.
   - Soporte dinámico para `aspect_ratio="9:16"` en Google Imagen 3 y Fal.ai Flux.
   - Conexión completa en `main.py` pasando `visual_contract` desde el guion hasta el orquestador de imágenes.
+- [x] **Phase 11: Multimodal Vision QA Gatekeeper, Stock Pexels/Picsum Hybrid & Prompt Poisoning Sanitizer**
+  - **Sanitización de Prompts Anti-Poisoning**: Erradicación absoluta de la raíz 'portrait' en composiciones 9:16 tanto en `src/image_generator.py` como en `src/script_generator.py`, sustituyéndola por `vertical 9:16 framing, mobile safe zone` e inyectando restricciones de planos deshabitados (`uninhabited scene, empty surroundings, no humans, no people, inanimate subject`) para planos generales y macro.
+  - **Guardián Multimodal Gemini Vision (`audit_image_with_gemini_vision`)**: Auditoría visual automática antes del ensamblaje (detección en tiempo real de marcas de agua `pollinations.ai`, humanos fuera de contexto y anacronismos absurdos) con cascada de modelos Gemini Flash (`gemini-2.5-flash`, `gemini-3.8-flash`, etc.).
+  - **Híbrido de Stock Pexels & Picsum Verificado**: Búsqueda contextual en Pexels API (`_fetch_from_pexels`) + rescate verificado en Picsum HD (`_fetch_from_picsum_verified`) donde cada foto es auditada por Gemini Vision antes de ser aceptada; si no cumple, se descarta y escala al fondo procedural cinemático.
+  - **Reintentos de IA con Prompts Negativos**: Si la IA generativa produce una imagen rechazada por el Gatekeeper (ej. marcas de agua o personas espurias), el pipeline reintenta con un prompt correctivo reforzado antes de activar los fallbacks.
+  - **Verificación Integral y Pruebas Empíricas**: Pruebas exitosas con escenas reales rechazando adecuadamente la mujer (`scene_003.png`) y el joven en el prado (`scene_004.png`), garantizando que solo imágenes coherentes lleguen al montaje final.
+
+

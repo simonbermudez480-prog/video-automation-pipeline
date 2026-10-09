@@ -51,7 +51,6 @@
 - Generación de copies y hashtags especializados mediante IA (Gemini / DeepSeek):
   - **YouTube Shorts:** Título con alto gancho (<60 caracteres + `#Shorts`), descripción estructurada con llamada a la acción y tags de búsqueda.
   - **Instagram Reels:** Gancho inicial en primera línea (hook), cuerpo explicativo conciso, CTA ("Guarda este video", "Síguenos") y 15-20 hashtags estratégicos combinando nicho y alto alcance.
-  - **TikTok:** Copy directo y viral (<250 caracteres), hook que detenga el scroll y 5-7 hashtags virales (`#fyp`, `#parati`, `#aprendecontiktok`, etc.).
 - Salida estructurada con validación Pydantic y plantillas fallback de alta conversión.
 
 ### FR-09: Multi-Platform Publishing Flow (`src/multiplatform_publisher.py`)
@@ -64,4 +63,20 @@
     - Copia del video en alta resolución 9:16.
     - Archivos de texto listos para copiar y pegar: `youtube_shorts.txt`, `instagram_reels.txt`, `tiktok.txt`.
     - Manifiesto `social_manifest.json` para integración con herramientas de automatización (Metricool, Buffer, Make, n8n).
+
+### FR-10: Visual Contract & Cinematic Consistency Matrix (`src/script_generator.py`, `src/image_generator.py`)
+- Definición de `VisualContract` por proyecto (`era_setting`, `art_style`, `color_palette`, `lighting_atmosphere`, `character_anchor`, `shot_progression_rules`).
+- Tipificación de planos (`shot_type`: `macro_detail`, `over_the_shoulder`, `silhouette_backlight`, `environmental_wide`, `dramatic_close_up`) para prevenir mutaciones faciales.
+
+### FR-11: Multimodal Vision QA Gatekeeper, Pexels/Picsum Hybrid & Anti-Poisoning (`src/image_generator.py`, `src/script_generator.py`)
+- **Sanitización de Prompts Anti-Poisoning**: Erradicación del token "portrait" en composiciones 9:16 para evitar que los modelos generen retratos humanos no deseados. Inyección de directivas negativas y composiciones cinemáticas deshabitadas (`no people, no portraits, archival artifact`) para planos generales y macro.
+- **Auditoría Multimodal con Gemini Vision**: Inspección automática de cada imagen antes de incluirla en el video:
+  - Detección de marcas de agua y logos comerciales (`pollinations.ai`, `shutterstock`, etc.).
+  - Detección de humanos no solicitados o discordancias anacrónicas/temáticas.
+  - Rechazo y reintento automático con corrección de prompt.
+- **Híbrido de Stock Pexels & Picsum con Verificación**:
+  - Soporte de Pexels API para fotografía y video de stock documental contextual.
+  - Filtrado inteligente de Picsum Photos mediante auditoría de Gemini Vision para descartar fotos aleatorias desconectadas.
+  - Fallback procedural cinemático si las fuentes externas no satisfacen los criterios de calidad.
+
 

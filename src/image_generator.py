@@ -13,6 +13,7 @@ Soporta:
 """
 import os
 import re
+import json
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -150,6 +151,7 @@ def _build_cohesive_prompt(
     """
     Combina el prompt de la escena con la biblia visual global (VisualContract)
     garantizando coherencia de paleta, iluminación y estilo cinematográfico.
+    Sanitiza activamente contra el 'prompt poisoning' eliminando palabras ambiguas como 'portrait'.
     """
     if not visual_contract:
         return base_prompt
@@ -171,10 +173,25 @@ def _build_cohesive_prompt(
     if lighting and lighting.lower() not in base_prompt.lower():
         components.append(f"Lighting: {lighting}")
 
-    ratio_tag = "vertical 9:16 portrait composition, mobile safe zone" if aspect_ratio == "9:16" else "cinematic 16:9 widescreen"
-    components.append(f"{ratio_tag}, authentic documentary film still, fine grain, no text, no captions, no watermark")
+    # Directivas estrictas anti-hallucination / anti-poisoning según el tipo de plano
+    if shot_type in ("environmental_wide", "macro_detail"):
+        components.append("uninhabited scene, empty surroundings, no humans, no people, inanimate subject, clean archival focus")
+    elif shot_type == "silhouette_backlight":
+        components.append("shadow silhouette from behind, back view, no frontal face visible")
+    elif shot_type == "over_the_shoulder":
+        components.append("over the shoulder camera angle, looking away from camera, anonymous back perspective")
 
-    return ". ".join(components)
+    ratio_tag = (
+        "vertical 9:16 framing, mobile safe zone, full height composition"
+        if aspect_ratio == "9:16"
+        else "cinematic 16:9 widescreen"
+    )
+    components.append(f"{ratio_tag}, authentic documentary film still, 35mm fine grain, no text, no captions, no watermark")
+
+    # Limpieza final de términos tóxicos de encuadre (singular y plural)
+    raw_prompt = ". ".join(components)
+    sanitized = re.sub(r"\bportraits?\b", "cinematic framing", raw_prompt, flags=re.IGNORECASE)
+    return sanitized
 
 
 def _generate_with_pollinations_flux(
@@ -186,8 +203,11 @@ def _generate_with_pollinations_flux(
     """
     Intenta generar imagen cinemática vía Pollinations AI:
     Soporta clave de API para modelos premium y fallback a modelo estándar en 16:9 o 9:16 con semilla consistente.
+    Aplica desinfección estricta de prompts contra el envenenamiento por palabras de encuadre humano.
     """
-    clean_prompt = re.sub(r"[^\w\s,.:;-]", " ", prompt)
+    # Desinfectar cualquier remanente de 'portrait' o 'portraits' para evitar que Flux pinte rostros/mujeres
+    clean_prompt = re.sub(r"\bportraits?\b", "cinematic framing", prompt, flags=re.IGNORECASE)
+    clean_prompt = re.sub(r"[^\w\s,.:;-]", " ", clean_prompt)
     clean_prompt = " ".join(clean_prompt.split()[:65])
     encoded = urllib.parse.quote(clean_prompt)
 
@@ -280,6 +300,146 @@ def _fetch_from_wikimedia_commons(prompt: str, output_path: Path, scene_id: int,
     return False
 
 
+def audit_image_with_gemini_vision(
+    image_path: Path,
+    scene_text: str = "",
+    scene_prompt: str = "",
+    shot_type: Optional[str] = None,
+) -> tuple[bool, str, list[str]]:
+    """
+    Audita una imagen generada o descargada usando Gemini Vision para certificar:
+    1. Cero humanos/mujeres fuera de contexto (especialmente en planos de ambiente o macro).
+    2. Cero marcas de agua, logos comerciales o texto superpuesto no deseado.
+    3. Coherencia semántica real con la narración y el tema (evita personas modernas o fotos desconectadas).
+
+    Retorna (aprobado: bool, razon: str, problemas_detectados: list[str]).
+    """
+    if not getattr(settings, "ENABLE_IMAGE_QA_GATEKEEPER", True):
+        return True, "Auditoría de visión deshabilitada", []
+
+    api_key = settings.GEMINI_API_KEY
+    if not api_key:
+        return True, "GEMINI_API_KEY no disponible para auditoría", []
+
+    if not image_path.exists() or image_path.stat().st_size < 5000:
+        return False, "Archivo de imagen inexistente o corrupto", ["EMPTY_OR_CORRUPT"]
+
+    from PIL import Image
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+    candidate_models = settings.get_gemini_vision_candidates()
+
+    try:
+        with Image.open(image_path) as pil_img:
+            img = pil_img.copy()
+    except Exception as img_err:
+        logger.warning("No se pudo cargar la imagen para auditoría visual: {}", img_err)
+        return False, f"Error cargando imagen: {img_err}", ["LOAD_ERROR"]
+
+    audit_prompt = f"""You are an expert QA inspector for historical and educational documentary videos.
+Audit this generated/downloaded image for Scene Context:
+- Narration: "{scene_text}"
+- Shot Type: "{shot_type or 'unspecified'}"
+- Intended Subject: "{scene_prompt}"
+
+Evaluate 3 critical disqualifiers:
+1. UNWANTED_HUMAN: Does the image feature an accidental or out-of-context person, woman, or man when the intended shot is an environmental/macro/nature/artifact scene without specified characters? (If shot_type is environmental_wide or macro_detail, any human is strictly forbidden).
+2. WATERMARK_OR_TEXT: Does the image contain visible watermarks (such as 'pollinations.ai', 'shutterstock', stock logos), intrusive text overlays, subtitles, or modern website logos?
+3. ABSURD_DISSONANCE: Is the image completely irrelevant or absurdly disconnected from the narration (e.g. a modern person in flowers for a WW2 documentary, or a random animal)?
+
+Output strictly in JSON format:
+{{
+  "approved": true or false,
+  "reason": "Brief explanation in Spanish",
+  "detected_issues": ["UNWANTED_HUMAN" | "WATERMARK_OR_TEXT" | "ABSURD_DISSONANCE"]
+}}
+"""
+
+    for model in candidate_models:
+        try:
+            resp = client.models.generate_content(
+                model=model,
+                contents=[img, audit_prompt],
+                config={"response_mime_type": "application/json"}
+            )
+            raw_text = resp.text or "{}"
+            data = json.loads(raw_text)
+            approved = bool(data.get("approved", True))
+            reason = str(data.get("reason", "Aprobado"))
+            issues = list(data.get("detected_issues", []))
+
+            if not approved:
+                logger.warning(
+                    "[Guardián QA Vision] Imagen '{}' RECHAZADA por '{}' (Problemas: {}): {}",
+                    image_path.name, model, ", ".join(issues) or "Inconsistencia", reason
+                )
+            else:
+                logger.info(
+                    "[Guardián QA Vision] Imagen '{}' APROBADA por '{}': {}",
+                    image_path.name, model, reason
+                )
+            return approved, reason, issues
+        except Exception as e:
+            err_msg = str(e)
+            if "503" in err_msg or "429" in err_msg:
+                logger.debug("Modelo Gemini Vision '{}' con alta carga o cuota, probando siguiente...", model)
+                continue
+            logger.warning("Error en auditoría visual con Gemini modelo '{}': {}. Probando siguiente...", model, e)
+
+    logger.warning("Guardián QA Vision: Modelos de visión no disponibles temporalmente; permitiendo imagen como fallback.")
+    return True, "Modelos de visión no disponibles", []
+
+
+def _fetch_from_pexels(
+    prompt: str,
+    keywords: str,
+    output_path: Path,
+    aspect_ratio: str = "16:9",
+) -> bool:
+    """
+    Obtiene fotografías de stock documental en alta resolución de Pexels API
+    usando las palabras clave temáticas de la escena y orientación portrait/landscape.
+    """
+    api_key = getattr(settings, "PEXELS_API_KEY", "") or os.getenv("PEXELS_API_KEY", "")
+    if not api_key:
+        logger.debug("Pexels API key no configurada (PEXELS_API_KEY). Saltando Pexels.")
+        return False
+
+    query = keywords or _extract_keywords_from_prompt(prompt)
+    orientation = "portrait" if aspect_ratio == "9:16" else "landscape"
+    url = f"https://api.pexels.com/v1/search?query={urllib.parse.quote(query)}&orientation={orientation}&per_page=5"
+    headers = {
+        "Authorization": api_key,
+        "User-Agent": "EducationalVideoBot/1.0 (educational documentary video)"
+    }
+
+    logger.info("Consultando Pexels API ('{}', orientación: {})...", query, orientation)
+    try:
+        resp = requests.get(url, headers=headers, timeout=12)
+        if resp.status_code == 200:
+            data = resp.json()
+            photos = data.get("photos", [])
+            for p in photos:
+                src = p.get("src", {})
+                img_url = src.get("large2x") or src.get("large") or src.get("portrait") or src.get("original")
+                if img_url:
+                    dl = requests.get(img_url, timeout=15)
+                    if dl.status_code == 200 and len(dl.content) > 10000:
+                        output_path.write_bytes(dl.content)
+                        _normalize_image_to_resolution(output_path, aspect_ratio)
+                        logger.success("Fotografía de stock contextual obtenida de Pexels API: {}", p.get("alt", p.get("id")))
+                        return True
+        elif resp.status_code == 401:
+            logger.warning("Pexels API Key inválida o no autorizada.")
+        else:
+            logger.warning("Pexels API respondió HTTP {}", resp.status_code)
+        return False
+    except Exception as e:
+        logger.warning("Fallo al consultar Pexels API ('{}'): {}", query, e)
+        return False
+
+
 def _fetch_from_nasa_archive(prompt: str, output_path: Path, scene_id: int, aspect_ratio: str = "16:9") -> bool:
     """
     Obtiene fotografías científicas reales en alta resolución del archivo oficial de la NASA.
@@ -322,29 +482,62 @@ def _fetch_from_nasa_archive(prompt: str, output_path: Path, scene_id: int, aspe
         return False
 
 
-def _fetch_from_picsum(prompt: str, output_path: Path, scene_id: int, aspect_ratio: str = "16:9") -> bool:
+def _fetch_from_picsum_verified(
+    prompt: str,
+    output_path: Path,
+    scene_id: int,
+    aspect_ratio: str = "16:9",
+    scene_text: str = "",
+    shot_type: Optional[str] = None,
+) -> bool:
     """
-    Descarga fotografías reales de alta definición según el formato (1080x1920 para 9:16 o 1920x1080 para 16:9)
-    desde el repositorio Picsum Photos utilizando semillas deterministas.
+    Descarga fotografías reales de alta definición desde Picsum Photos
+    auditadas por el Guardián Gemini Vision para garantizar que no contengan
+    personas fuera de contexto ni discordancias absurdas.
     """
     target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
-    logger.info("Descargando fotografía documental real {}x{} (Picsum HD)...", target_w, target_h)
-    seed = f"docu_scene_{scene_id}_{abs(hash(prompt)) % 100000}"
-    candidate_urls = [
-        f"https://picsum.photos/seed/{seed}/{target_w}/{target_h}",
-        f"https://picsum.photos/{target_w}/{target_h}?random={scene_id}",
+    logger.info("Descargando y auditando fotografía documental (Picsum HD + Gemini QA)...")
+
+    # IDs curados de Picsum que corresponden a paisajes, agua, montañas, texturas y arquitectura
+    curated_nature_ids = [
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 28, 29, 37, 42, 49,
+        54, 57, 58, 59, 110, 111, 116, 122, 129, 137, 142, 152, 164,
+        175, 184, 197, 214, 219, 225, 235, 248, 256, 260, 274, 287
     ]
 
-    for url in candidate_urls:
+    seeds_to_try = [
+        curated_nature_ids[(scene_id * 7) % len(curated_nature_ids)],
+        curated_nature_ids[(scene_id * 13 + 3) % len(curated_nature_ids)],
+        f"docu_landscape_{scene_id}",
+    ]
+
+    for candidate in seeds_to_try:
+        if isinstance(candidate, int):
+            url = f"https://picsum.photos/id/{candidate}/{target_w}/{target_h}"
+        else:
+            url = f"https://picsum.photos/seed/{candidate}/{target_w}/{target_h}"
+
         try:
-            resp = requests.get(url, headers=BROWSER_HEADERS, timeout=15)
+            resp = requests.get(url, headers=BROWSER_HEADERS, timeout=12)
             if resp.status_code == 200 and len(resp.content) > 10000:
                 output_path.write_bytes(resp.content)
                 _normalize_image_to_resolution(output_path, aspect_ratio)
-                logger.success("Fotografía real {}x{} descargada con éxito: {}", target_w, target_h, output_path.name)
-                return True
+
+                # Auditoría rigurosa con Gemini Vision
+                approved, reason, issues = audit_image_with_gemini_vision(
+                    output_path,
+                    scene_text=scene_text or prompt,
+                    scene_prompt=prompt,
+                    shot_type=shot_type,
+                )
+                if approved:
+                    logger.success("Fotografía documental de Picsum auditada y aprobada para escena #{:03d}", scene_id)
+                    return True
+                else:
+                    logger.warning("Foto Picsum descartada por Gemini Vision ({}): {}", issues, reason)
         except Exception as e:
-            logger.warning("Fallo en intento Picsum HD ({}): {}", url, e)
+            logger.warning("Fallo en intento Picsum: {}", e)
+
     return False
 
 
@@ -396,15 +589,16 @@ def generate_single_image(
     visual_contract: Optional[object] = None,
     shot_type: Optional[str] = None,
     topic_seed: Optional[int] = None,
+    scene_text: str = "",
 ) -> bool:
     """
     Genera u obtiene una imagen real (16:9 o 9:16) mediante una cascada inteligente de calidad y contexto,
-    reforzada con la biblia visual global (VisualContract) para asegurar máxima coherencia.
+    reforzada con la biblia visual global (VisualContract) y auditada por el Guardián Gemini Vision.
     """
     selected_provider = (provider or settings.IMAGE_PROVIDER).lower()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 0. Enriquecer el prompt con el contrato visual si está presente
+    # 0. Enriquecer el prompt con el contrato visual y desinfectar términos ambiguos
     cohesive_prompt = _build_cohesive_prompt(prompt, visual_contract, shot_type=shot_type, aspect_ratio=aspect_ratio)
     
     # Semilla determinista por escena para coherencia estética y de ruido
@@ -416,7 +610,14 @@ def generate_single_image(
     ):
         if _generate_with_fal(cohesive_prompt, output_path, aspect_ratio=aspect_ratio):
             _normalize_image_to_resolution(output_path, aspect_ratio)
-            return True
+            approved, reason, _ = audit_image_with_gemini_vision(
+                output_path,
+                scene_text=scene_text or prompt,
+                scene_prompt=prompt,
+                shot_type=shot_type,
+            )
+            if approved:
+                return True
 
     # 2. Google Imagen 3 (si hay API Key de Google configurada o se selecciona imagen)
     if selected_provider == "imagen" or (
@@ -424,7 +625,14 @@ def generate_single_image(
     ):
         if _generate_with_google_imagen(cohesive_prompt, output_path, aspect_ratio=aspect_ratio):
             _normalize_image_to_resolution(output_path, aspect_ratio)
-            return True
+            approved, reason, _ = audit_image_with_gemini_vision(
+                output_path,
+                scene_text=scene_text or prompt,
+                scene_prompt=prompt,
+                shot_type=shot_type,
+            )
+            if approved:
+                return True
 
     # 3. Pollinations (IA generativa gratuita o con clave en 16:9 o 9:16 con semilla consistente)
     has_combat_keywords = False
@@ -442,21 +650,69 @@ def generate_single_image(
 
     if not has_combat_keywords:
         if _generate_with_pollinations_flux(cohesive_prompt, output_path, aspect_ratio=aspect_ratio, seed=scene_seed):
+            approved, reason, issues = audit_image_with_gemini_vision(
+                output_path,
+                scene_text=scene_text or prompt,
+                scene_prompt=prompt,
+                shot_type=shot_type,
+            )
+            if approved:
+                return True
+            else:
+                logger.warning(
+                    "[Guardián QA Vision] Imagen de IA para Escena #{:03d} rechazada ({}): {}. Reintentando con prompt correctivo reforzado...",
+                    scene_id, ", ".join(issues) or "Inconsistencia", reason
+                )
+                remedy_prompt = f"{cohesive_prompt}, uninhabited scene, absolutely no humans, no people, no portraits, clean frame, no watermarks, no logos"
+                remedy_seed = (scene_seed + 101) if scene_seed is not None else None
+                if _generate_with_pollinations_flux(remedy_prompt, output_path, aspect_ratio=aspect_ratio, seed=remedy_seed):
+                    appr2, reason2, _ = audit_image_with_gemini_vision(
+                        output_path,
+                        scene_text=scene_text or prompt,
+                        scene_prompt=prompt,
+                        shot_type=shot_type,
+                    )
+                    if appr2:
+                        return True
+
+    # 4. Pexels API (fotografía documental contextual real en alta definición)
+    if _fetch_from_pexels(prompt, keywords or "", output_path, aspect_ratio=aspect_ratio):
+        approved, reason, _ = audit_image_with_gemini_vision(
+            output_path,
+            scene_text=scene_text or prompt,
+            scene_prompt=prompt,
+            shot_type=shot_type,
+        )
+        if approved:
             return True
 
-    # 4. NASA Deep Space Archive (fotografías espaciales reales, si es tema astronómico o cosmológico)
+    # 5. NASA Deep Space Archive (fotografías espaciales reales, si es tema astronómico o cosmológico)
     if _fetch_from_nasa_archive(prompt, output_path, scene_id, aspect_ratio=aspect_ratio):
         return True
 
-    # 5. Archivo Histórico / Documental Wikimedia Commons (fotografías históricas reales, mapas, archivos)
+    # 6. Archivo Histórico / Documental Wikimedia Commons (fotografías históricas reales, mapas, archivos)
     if _fetch_from_wikimedia_commons(prompt, output_path, scene_id, keywords, aspect_ratio=aspect_ratio):
+        approved, reason, _ = audit_image_with_gemini_vision(
+            output_path,
+            scene_text=scene_text or prompt,
+            scene_prompt=prompt,
+            shot_type=shot_type,
+        )
+        if approved:
+            return True
+
+    # 7. Repositorio de Fotografía Documental Real Picsum HD (Auditado por el Guardián Gemini Vision)
+    if _fetch_from_picsum_verified(
+        prompt,
+        output_path,
+        scene_id,
+        aspect_ratio=aspect_ratio,
+        scene_text=scene_text or prompt,
+        shot_type=shot_type,
+    ):
         return True
 
-    # 6. Repositorio de Fotografía Documental Real Picsum HD (1920x1080 o 1080x1920)
-    if _fetch_from_picsum(prompt, output_path, scene_id, aspect_ratio=aspect_ratio):
-        return True
-
-    # 7. Red de seguridad cinemática procedural (garantiza que siempre exista frame válido)
+    # 8. Red de seguridad cinemática procedural (garantiza frame limpio con viñeta y paleta documental)
     if _generate_procedural_fallback_image(scene_id, prompt, output_path, aspect_ratio=aspect_ratio):
         return True
 
@@ -476,7 +732,7 @@ def generate_images_for_scenes(
     Itera sobre la lista de escenas del guion y descarga concurrentemente
     cada imagen real en assets/images/scene_{idx:03d}.png en formato 16:9 o 9:16.
     Invalida automáticamente la caché si el tema o el aspect ratio cambiaron respecto a la ejecución anterior.
-    Aplica la biblia visual (VisualContract) para asegurar coherencia entre escenas.
+    Aplica la biblia visual (VisualContract) y el Guardián Gemini Vision para asegurar coherencia total.
     """
     target_dir = output_dir or settings.IMAGES_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -543,6 +799,7 @@ def generate_images_for_scenes(
                 visual_contract=visual_contract,
                 shot_type=shot_type,
                 topic_seed=base_seed,
+                scene_text=getattr(s_scene, "narration_text", ""),
             )
             if not success or not s_path.exists():
                 logger.warning("Generando salvaguarda procedural para Escena #{:03d}...", s_idx)

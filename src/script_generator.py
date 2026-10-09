@@ -78,7 +78,7 @@ def _build_system_prompt(duration_minutes: float, target_words: int, num_scenes:
     is_vertical = aspect_ratio == "9:16"
     format_desc = "VERTICAL 9:16 (Shorts/Reels/TikTok)" if is_vertical else "PANORÁMICO 16:9 (Documental horizontal)"
     ratio_guidance = (
-        "Es un video VERTICAL 9:16 para smartphones (TikTok/Shorts/Reels). Cada escena debe ser concebida en orientación vertical ('portrait orientation, vertical 9:16 mobile format'), con el sujeto focal perfectamente encuadrado en el tercio superior o medio para no ser tapado por los subtítulos inferiores."
+        "Es un video VERTICAL 9:16 para smartphones (TikTok/Shorts/Reels). Cada escena debe ser concebida en orientación vertical ('vertical 9:16 framing, mobile format'), con el sujeto focal perfectamente encuadrado en el tercio superior o medio para no ser tapado por los subtítulos inferiores."
         if is_vertical
         else "Es un video PANORÁMICO 16:9 cinematográfico."
     )
@@ -108,16 +108,20 @@ DIRECTRICES DE COHERENCIA VISUAL (VISUAL CONTRACT & ANTI-FACE-MORPHING):
      * 'macro_detail': Planos detalle de manos, notas escritas, dinero, relojes, instrumentos, mapas, huellas, objetos clave en tensión.
      * 'over_the_shoulder': Planos desde la espalda del sujeto observando la escena.
      * 'silhouette_backlight': Silueta del sujeto a contraluz contra una ventana o foco de luz.
-     * 'environmental_wide': Planos de ambiente amplios (un avión en la pista bajo tormenta, una oficina desierta de noche).
+     * 'environmental_wide': Planos de ambiente amplios (un lago en la niebla, un bosque alpino, una bóveda bancaria desierta).
      * 'dramatic_close_up': Solo cuando sea un objeto, mirada en sombra o detalle extremo.
 
-8. Para cada escena, escribe un 'visual_prompt' en inglés ultra-específico:
+8. REGLA ESTRICTA ANTI-PROMPT-POISONING (CERO HUMANOS ESPURIOS):
+   - NUNCA uses la palabra 'portrait' en 'visual_prompt', pues los modelos de difusión la interpretan erróneamente como un retrato humano de estudio. Usa 'vertical 9:16 framing'.
+   - Si la escena describe un entorno, artefacto, naturaleza, lago, vehículo o documento (especialmente 'environmental_wide' o 'macro_detail'), debes incluir explícitamente: 'uninhabited scene, no people, no portraits, archival artifact' para evitar que la IA dibuje personas fuera de contexto.
+
+9. Para cada escena, escribe un 'visual_prompt' en inglés ultra-específico:
    - Describe la ACCIÓN FÍSICA EXACTA que se está relatando en esa escena específica (no conceptos abstractos).
    - Debe alinearse estrictamente con el 'visual_contract' y especificar el ángulo de cámara ('shot_type').
-   - Formato {aspect_ratio}: {'vertical 9:16 portrait composition, mobile safe zone' if is_vertical else 'cinematic 16:9 widescreen'}.
+   - Formato {aspect_ratio}: {'vertical 9:16 framing, mobile safe zone' if is_vertical else 'cinematic 16:9 widescreen'}.
    - Termina siempre especificando: 'cinematic film still, photorealistic, 8k, no text, no watermark, no captions'.
-9. Para cada escena, incluye 'search_keywords' con 3 a 6 términos clave en inglés para archivo documental o histórico.
-10. Metadatos optimizados para YouTube: Título con alto gancho emocional (añade '#Shorts' si es 9:16), descripción completa y tags relevantes.
+10. Para cada escena, incluye 'search_keywords' con 3 a 6 términos clave en inglés para archivo documental o histórico.
+11. Metadatos optimizados para YouTube: Título con alto gancho emocional (añade '#Shorts' si es 9:16), descripción completa y tags relevantes.
 """
 
 
@@ -287,7 +291,7 @@ def _generate_wwii_fallback_script(aspect_ratio: str = "16:9") -> ScriptOutput:
     """
     logger.warning("Generando guion documental histórico completo para: 'Segunda Guerra Mundial' (18 escenas, {})", aspect_ratio)
     if aspect_ratio == "9:16":
-        style_suffix = ", vertical 9:16 portrait orientation, mobile format, centered composition, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning history concept art, no text, no watermark"
+        style_suffix = ", vertical 9:16 framing, mobile format, centered tall composition, cinematic 8k, photorealistic, volumetric lighting, 35mm documentary film still, fine grain, no text, no watermark"
     else:
         style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning history concept art, no text, no watermark"
 
@@ -449,7 +453,7 @@ def _generate_quantum_fallback_script(aspect_ratio: str = "16:9") -> ScriptOutpu
     """
     logger.warning("Generando guion documental de cosmología: 'Muerte Cuántica y el Multiverso' ({})", aspect_ratio)
     if aspect_ratio == "9:16":
-        style_suffix = ", vertical 9:16 portrait orientation, mobile format, centered composition, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
+        style_suffix = ", vertical 9:16 framing, mobile format, centered tall composition, cinematic 8k, photorealistic, volumetric lighting, 35mm film still, fine grain, no text, no watermark"
     else:
         style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
 
@@ -608,7 +612,7 @@ def _generate_dynamic_topic_fallback(topic: str, duration_minutes: float, target
     clean_topic = topic.strip()
     logger.warning("Generando guion documental dinámico adaptado específicamente para: '{}' (18 escenas, {})", clean_topic, aspect_ratio)
     if aspect_ratio == "9:16":
-        style_suffix = ", vertical 9:16 portrait orientation, mobile format, centered composition, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning documentary concept art, no text, no watermark"
+        style_suffix = ", vertical 9:16 framing, mobile format, centered tall composition, cinematic 8k, photorealistic, volumetric lighting, 35mm film still, fine grain, no text, no watermark"
     else:
         style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning documentary concept art, no text, no watermark"
 
@@ -616,7 +620,7 @@ def _generate_dynamic_topic_fallback(topic: str, duration_minutes: float, target
         ("A lo largo de las épocas, pocas materias han transformado tanto nuestra comprensión del mundo como {topic}. Explorar su verdadero alcance revela fascinantes interrogantes.", "Cinematic documentary photography, wide panoramic atmospheric view representing {topic}, dramatic lighting and thoughtful composition"),
         ("Para comprender la esencia de {topic}, es indispensable viajar hacia sus raíces originales, donde los primeros indicios comenzaron a cambiar la historia.", "Historical documentary setting with vintage archives, warm amber sidelighting and authentic period details regarding {topic}"),
         ("El punto de partida no fue fortuito: surgió como una respuesta necesaria ante desafíos fundamentales que la sociedad de su época no podía ignorar.", "Authentic archival scene with intellectuals and pioneers examining blueprints and manuscripts related to {topic}"),
-        ("Grandes mentes e investigadores pioneros dedicaron sus vidas a dar forma a las bases que hoy sustentan nuestra comprensión de {topic}.", "Dramatic portrait of visionary pioneers working in a classic historical workshop or laboratory studying {topic}"),
+        ("Grandes mentes e investigadores pioneros dedicaron sus vidas a dar forma a las bases que hoy sustentan nuestra comprensión de {topic}.", "Archival cinematic view of visionary pioneers working in a classic historical workshop or laboratory studying {topic}"),
         ("Sin embargo, los comienzos estuvieron marcados por la resistencia. Las ideas tradicionales chocaron frontalmente con los revolucionarios conceptos de {topic}.", "Intense debate in a grand historic hall, dramatic chiaroscuro lighting, emotional tension surrounding the breakthrough of {topic}"),
         ("En su núcleo operativo, {topic} se sostiene sobre mecanismos y principios rigurosos que operan con una precisión verdaderamente admirable.", "Detailed visualization of the intricate internal mechanisms and structural concepts driving {topic}, macro cinematography"),
         ("Con el correr de las décadas, la influencia de {topic} comenzó a expandirse rápidamente, superando fronteras geográficas e impactando a diversas culturas.", "Epic visual map and connecting network lines glowing over continents, illustrating the global spread of {topic}"),
@@ -688,7 +692,7 @@ def _is_dimension_or_senses_topic(topic: str) -> bool:
 def _generate_dimension_and_senses_fallback_script(aspect_ratio: str = "9:16") -> ScriptOutput:
     logger.info("Cargando guion documental maestro especializado: 'La Cuarta Dimensión y los Sentidos Ocultos' ({})", aspect_ratio)
     if aspect_ratio == "9:16":
-        style_suffix = ", vertical 9:16 portrait orientation, mobile format, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
+        style_suffix = ", vertical 9:16 framing, mobile format, tall composition, cinematic 8k, photorealistic, volumetric lighting, 35mm film still, fine grain, no text, no watermark"
     else:
         style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning sci-fi concept art, no text, no watermark"
 
@@ -826,7 +830,7 @@ def _is_fedex_or_casino_topic(topic: str) -> bool:
 def _generate_fedex_casino_fallback_script(aspect_ratio: str = "9:16") -> ScriptOutput:
     logger.info("Cargando guion documental maestro especializado: 'El Fundador de FedEx y la Apuesta en Las Vegas' ({})", aspect_ratio)
     if aspect_ratio == "9:16":
-        style_suffix = ", vertical 9:16 portrait orientation, mobile format, cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning documentary concept art, no text, no watermark"
+        style_suffix = ", vertical 9:16 framing, mobile format, tall composition, cinematic 8k, photorealistic, volumetric lighting, 35mm film still, fine grain, no text, no watermark"
     else:
         style_suffix = ", cinematic 8k, photorealistic, volumetric lighting, unreal engine 5 render, award winning documentary concept art, no text, no watermark"
 

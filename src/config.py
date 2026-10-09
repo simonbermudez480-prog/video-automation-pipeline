@@ -125,6 +125,21 @@ class Settings:
     IMAGE_ASPECT_RATIO: str = os.getenv("IMAGE_ASPECT_RATIO", "16:9")
     CONCURRENT_IMAGE_WORKERS: int = int(os.getenv("CONCURRENT_IMAGE_WORKERS", "4"))
     ENABLE_IMAGE_ENHANCEMENT: bool = os.getenv("ENABLE_IMAGE_ENHANCEMENT", "true").lower() in ("true", "1", "yes")
+    ENABLE_IMAGE_QA_GATEKEEPER: bool = os.getenv("ENABLE_IMAGE_QA_GATEKEEPER", "true").lower() in ("true", "1", "yes")
+    GEMINI_VISION_FALLBACK_MODELS: list[str] = [
+        "gemini-2.5-flash",
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.5-flash",
+        "gemini-flash-latest",
+    ]
+
+    def get_gemini_vision_candidates(self) -> list[str]:
+        """Retorna la lista ordenada de modelos Gemini con capacidad de visión para auditoría QA."""
+        env_cascade = os.getenv("GEMINI_VISION_MODELS", "")
+        if env_cascade:
+            return [m.strip() for m in env_cascade.split(",") if m.strip()]
+        return list(self.GEMINI_VISION_FALLBACK_MODELS)
 
     # --- Duración y Estructura ---
     DEFAULT_DURATION_MINUTES: float = float(os.getenv("DEFAULT_DURATION_MINUTES", "2.5"))
