@@ -196,6 +196,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             text=script_data.narration_full,
             output_path=job_audio_path,
             provider=args.tts_provider,
+            voice=getattr(args, "tts_voice", None),
         )
         try:
             shutil.copy2(narration_audio, settings.NARRATION_AUDIO_PATH)
@@ -449,9 +450,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tts-provider",
         type=str,
-        choices=["elevenlabs", "edge-tts"],
+        choices=["gemini", "elevenlabs", "edge-tts"],
         default=settings.TTS_PROVIDER,
-        help="Motor de síntesis de voz (edge-tts es 100%% gratuito)",
+        help="Motor de síntesis de voz (gemini: nativo y expresivo, elevenlabs, edge-tts)",
+    )
+    parser.add_argument(
+        "--tts-voice",
+        type=str,
+        default=None,
+        help="Voz específica para el sintetizador (ej. 'Puck', 'Charon', 'Aoede', 'Fenrir' en Gemini, o 'es-MX-DaliaNeural' en Edge-TTS)",
     )
     parser.add_argument(
         "--image-provider",

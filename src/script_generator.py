@@ -9,6 +9,7 @@ Utiliza:
 import json
 import math
 import re
+import time
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -87,9 +88,17 @@ def _clean_json_response(raw_text: str) -> str:
     return cleaned.strip()
 
 
-def _generate_with_gemini(topic: str, duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> ScriptOutput:
+def _generate_with_gemini(
+    topic: str,
+    duration_minutes: float,
+    target_words: int,
+    num_scenes: int,
+    aspect_ratio: str = "16:9",
+    model_name: Optional[str] = None,
+) -> ScriptOutput:
     """Genera el guion de larga duración utilizando la API de Google Gemini."""
-    logger.info("Solicitando guion documental a Google Gemini ({}) - Objetivo: {:.1f} min ({} palabras, {} escenas, formato: {})", settings.GEMINI_MODEL, duration_minutes, target_words, num_scenes, aspect_ratio)
+    target_model = model_name or settings.GEMINI_MODEL
+    logger.info("Solicitando guion documental a Google Gemini ({}) - Objetivo: {:.1f} min ({} palabras, {} escenas, formato: {})", target_model, duration_minutes, target_words, num_scenes, aspect_ratio)
     from google import genai
     from google.genai import types
 
@@ -105,7 +114,7 @@ def _generate_with_gemini(topic: str, duration_minutes: float, target_words: int
     )
 
     response = client.models.generate_content(
-        model=settings.GEMINI_MODEL,
+        model=target_model,
         contents=[user_prompt],
         config=types.GenerateContentConfig(
             system_instruction=system_prompt,
@@ -116,10 +125,59 @@ def _generate_with_gemini(topic: str, duration_minutes: float, target_words: int
     )
 
     if not response.text:
-        raise ValueError("Google Gemini devolvió una respuesta vacía.")
+        raise ValueError(f"Google Gemini ({target_model}) devolvió una respuesta vacía.")
 
     data = json.loads(response.text)
     return ScriptOutput.model_validate(data)
+
+
+def _generate_with_gemini_cascade(
+    topic: str,
+    duration_minutes: float,
+    target_words: int,
+    num_scenes: int,
+    aspect_ratio: str = "16:9",
+) -> ScriptOutput:
+    """
+    Ejecuta una cascada de modelos Gemini (3.8-flash, 3.7-flash, 3.6-flash, 3.5-flash, 2.5-flash, etc.)
+    garantizando que ante errores 429 (Resource Exhausted / Rate Limit) o 503 (High Demand / Unavailable)
+    se pase automáticamente al siguiente modelo sin caer en heurísticas genéricas.
+    """
+    candidate_models = settings.get_gemini_model_candidates()
+    last_error: Optional[Exception] = None
+
+    for idx, model in enumerate(candidate_models, 1):
+        try:
+            logger.info("Cascada Gemini [{}/{}]: Solicitando guion a '{}'...", idx, len(candidate_models), model)
+            script = _generate_with_gemini(
+                topic=topic,
+                duration_minutes=duration_minutes,
+                target_words=target_words,
+                num_scenes=num_scenes,
+                aspect_ratio=aspect_ratio,
+                model_name=model,
+            )
+            logger.success("Guion documental generado exitosamente con Gemini modelo '{}'", model)
+            return script
+        except Exception as e:
+            last_error = e
+            err_msg = str(e)
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+                logger.warning(
+                    "Cuota / Rate Limit agotado para Gemini '{}' (429). Saltando de inmediato al siguiente modelo en cascada...",
+                    model
+                )
+            elif "503" in err_msg or "UNAVAILABLE" in err_msg:
+                logger.warning(
+                    "Alta demanda temporal en Gemini '{}' (503). Saltando al siguiente modelo en cascada...",
+                    model
+                )
+            else:
+                logger.warning("Fallo en Gemini '{}': {}. Probando siguiente modelo en cascada...", model, err_msg)
+
+    raise RuntimeError(
+        f"Todos los modelos de la cascada Gemini ({candidate_models}) fallaron. Último error: {last_error}"
+    )
 
 
 def _generate_with_deepseek(topic: str, duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> ScriptOutput:
@@ -881,6 +939,8 @@ def generate_script(
     """
     Punto de entrada principal para generar el guion y metadatos.
     Calcula dinámicamente palabras y escenas para la duración objetivo y aspect ratio.
+    Utiliza una robusta cascada de modelos Gemini (3.8-flash, 3.7-flash, 3.6-flash, 3.5-flash, 2.5-flash, etc.)
+    para sortear rate limits y picos de demanda, evitando heurísticas pre-programadas.
     """
     # Ritmo estándar de 140 palabras por minuto
     calculated_words = target_words or int(duration_minutes * 140)
@@ -889,32 +949,39 @@ def generate_script(
 
     selected_provider = (provider or settings.LLM_PROVIDER).lower()
 
-    # 1. Intentar proveedor seleccionado
-    if selected_provider == "gemini" and settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "tu_clave_gemini_aqui":
-        try:
-            return _generate_with_gemini(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
-        except Exception as e:
-            logger.error("Fallo con Gemini: {}. Buscando alternativas...", e)
-    elif selected_provider == "deepseek" and settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
+    # 1. Si se eligió DeepSeek específicamente, intentarlo primero
+    if selected_provider == "deepseek" and settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
         try:
             return _generate_with_deepseek(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
         except Exception as e:
-            logger.error("Fallo con DeepSeek: {}. Buscando alternativas...", e)
+            logger.error("Fallo con DeepSeek: {}. Pasando a cascada de Gemini...", e)
 
-    # 2. Intentar proveedor alternativo si el principal no funcionó
-    if selected_provider != "gemini" and settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "tu_clave_gemini_aqui":
+    # 2. Cascada de modelos Gemini
+    if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "tu_clave_gemini_aqui":
         try:
-            return _generate_with_gemini(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
+            return _generate_with_gemini_cascade(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
         except Exception as e:
-            logger.error("Fallo alternativo con Gemini: {}", e)
+            logger.error("Fallo en cascada completa de Gemini: {}", e)
 
+    # 3. Reintento alternativo con DeepSeek si aún no se ha probado
     if selected_provider != "deepseek" and settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
         try:
             return _generate_with_deepseek(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
         except Exception as e:
             logger.error("Fallo alternativo con DeepSeek: {}", e)
 
-    # 3. Fallback estructurado de alta densidad
+    # 4. Control Anti-Heurística estricto
+    if not settings.ALLOW_HEURISTIC_SCRIPTS:
+        logger.error(
+            "Se agotaron todos los modelos de IA disponibles para generar el guion y el uso de heurística está estrictamente deshabilitado."
+        )
+        raise RuntimeError(
+            f"No se pudo generar el guion documental para '{topic}' mediante IA. "
+            "Todos los modelos de la cascada fallaron (rate limits o saturación temporal) "
+            "y el uso de heurísticas/plantillas genéricas está desactivado para asegurar calidad real de contenido."
+        )
+
+    logger.warning("Generando guion con plantilla de contingencia (ALLOW_HEURISTIC_SCRIPTS=True)...")
     return _generate_fallback_script(topic, duration_minutes, calculated_words, calculated_scenes, aspect_ratio=aspect_ratio)
 
 

@@ -73,9 +73,15 @@ Todos los textos deben redactarse en español neutro, natural y magnético.
 """
 
 
-def _generate_with_gemini(topic: str, narration_summary: str, duration_seconds: float) -> SocialBundle:
+def _generate_with_gemini(
+    topic: str,
+    narration_summary: str,
+    duration_seconds: float,
+    model_name: Optional[str] = None,
+) -> SocialBundle:
     """Genera el paquete de copies con Google Gemini."""
-    logger.info("Generando copies y hashtags para redes sociales con Google Gemini ({})...", settings.GEMINI_MODEL)
+    target_model = model_name or settings.GEMINI_MODEL
+    logger.info("Generando copies y hashtags para redes sociales con Google Gemini ({})...", target_model)
     from google import genai
     from google.genai import types
 
@@ -83,7 +89,7 @@ def _generate_with_gemini(topic: str, narration_summary: str, duration_seconds: 
     prompt = _build_social_prompt(topic, narration_summary, duration_seconds)
 
     response = client.models.generate_content(
-        model=settings.GEMINI_MODEL,
+        model=target_model,
         contents=[f"Genera los copies para: '{topic}'\n{prompt}"],
         config=types.GenerateContentConfig(
             temperature=0.7,
@@ -93,10 +99,48 @@ def _generate_with_gemini(topic: str, narration_summary: str, duration_seconds: 
     )
 
     if not response.text:
-        raise ValueError("Google Gemini devolvió una respuesta vacía al generar copies sociales.")
+        raise ValueError(f"Google Gemini ({target_model}) devolvió una respuesta vacía al generar copies sociales.")
 
     data = json.loads(response.text)
     return SocialBundle.model_validate(data)
+
+
+def _generate_with_gemini_cascade(
+    topic: str,
+    narration_summary: str,
+    duration_seconds: float,
+) -> SocialBundle:
+    """
+    Ejecuta una cascada ordenada de modelos Gemini para generar copies sociales,
+    sorteando rate limits (429) y picos de carga (503).
+    """
+    candidate_models = settings.get_gemini_model_candidates()
+    last_error: Optional[Exception] = None
+
+    for idx, model in enumerate(candidate_models, 1):
+        try:
+            logger.info("Cascada Gemini Copies [{}/{}]: Intentando modelo '{}'...", idx, len(candidate_models), model)
+            bundle = _generate_with_gemini(
+                topic=topic,
+                narration_summary=narration_summary,
+                duration_seconds=duration_seconds,
+                model_name=model,
+            )
+            logger.success("Copies sociales generados con éxito por Gemini modelo '{}'", model)
+            return bundle
+        except Exception as e:
+            last_error = e
+            err_msg = str(e)
+            if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+                logger.warning("Cuota agotada en Gemini '{}' (429). Saltando al siguiente modelo en cascada...", model)
+            elif "503" in err_msg or "UNAVAILABLE" in err_msg:
+                logger.warning("Alta demanda en Gemini '{}' (503). Saltando al siguiente modelo en cascada...", model)
+            else:
+                logger.warning("Error en Gemini '{}' al generar copies: {}. Probando siguiente...", model, err_msg)
+
+    raise RuntimeError(
+        f"Todos los modelos de la cascada Gemini ({candidate_models}) fallaron al generar copies. Último error: {last_error}"
+    )
 
 
 def _generate_with_deepseek(topic: str, narration_summary: str, duration_seconds: float) -> SocialBundle:
@@ -233,24 +277,23 @@ def generate_social_copy(
     """
     selected_provider = (provider or settings.LLM_PROVIDER).lower()
 
-    if selected_provider == "gemini" and settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "tu_clave_gemini_aqui":
-        try:
-            return _generate_with_gemini(topic, narration_summary, duration_seconds)
-        except Exception as e:
-            logger.warning("Fallo al generar copies con Gemini: {}. Intentando alternativa...", e)
-
     if selected_provider == "deepseek" and settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
         try:
             return _generate_with_deepseek(topic, narration_summary, duration_seconds)
         except Exception as e:
-            logger.warning("Fallo al generar copies con DeepSeek: {}. Intentando alternativa...", e)
+            logger.warning("Fallo al generar copies con DeepSeek: {}. Probando cascada de Gemini...", e)
 
-    # Reintento con Gemini si no era el seleccionado original pero tiene clave
-    if selected_provider != "gemini" and settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "tu_clave_gemini_aqui":
+    if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "tu_clave_gemini_aqui":
         try:
-            return _generate_with_gemini(topic, narration_summary, duration_seconds)
+            return _generate_with_gemini_cascade(topic, narration_summary, duration_seconds)
         except Exception as e:
-            logger.warning("Fallo en fallback con Gemini: {}", e)
+            logger.warning("Fallo en cascada de Gemini para copies: {}. Intentando alternativa...", e)
+
+    if selected_provider != "deepseek" and settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
+        try:
+            return _generate_with_deepseek(topic, narration_summary, duration_seconds)
+        except Exception as e:
+            logger.warning("Fallo alternativo con DeepSeek para copies: {}", e)
 
     logger.info("Utilizando generador de copies analítico de alta retención para: '{}'", topic)
     return _generate_deterministic_social_fallback(topic, narration_summary)

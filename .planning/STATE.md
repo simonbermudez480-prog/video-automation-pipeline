@@ -1,18 +1,22 @@
 # Current Project State
 
 ## Status
-- **Current Phase:** Phase 7 Complete (Multi-Platform Publishing: YouTube Shorts, Instagram Reels, TikTok & AI Social Copywriter)
-- **Active Task:** Phase 7 Finalized and Verified. Ready for new feature requests or production scaling.
+- **Current Phase:** Phase 9 Complete (Human-Grade Gemini 3.8 Flash TTS & Acoustic Mastering Chain)
+- **Active Task:** Phase 9 Finalized and Verified. Ready for ultra-expressive automated video production.
 - **Completed:**
-  - `src/social_copywriter.py`: Modelos Pydantic (`YouTubeShortsPost`, `InstagramReelsPost`, `TikTokPost`, `SocialBundle`), integración con Gemini / DeepSeek y fallback analítico determinista con títulos <58 chars con `#Shorts`, hooks para Instagram Reels y TikTok con hashtags categorizados.
-  - `src/buffer_publisher.py`: Conector oficial con Buffer GraphQL API (`https://api.buffer.com`). Autodescubrimiento dinámico de canales para YouTube Shorts ("Historia y curiosidades"), Instagram Reels ("@historiaycultura2411") y TikTok ("@historiaycultura2411"). Subida de video a hosting temporal público para ingesta en Buffer y mutación `createPost` con copys específicos por red social.
-  - Integración en `src/multiplatform_publisher.py` y `main.py` CLI con `--publish-all`.
-  - Verificación en vivo: 3 publicaciones exitosas confirmadas con Post IDs reales en Buffer (`6ac19863fec59133948d0678`, `6ac19868814d657011dba348`, `6ac198755829d2489afd673f`).
+  - `src/config.py`: Proveedor TTS nativo `gemini` configurado como predeterminado con modelo `gemini-3.8-flash-tts` y voz expresiva `Puck`. Cascada de fallback TTS configurada (`gemini-3.8-flash-tts`, `gemini-3.8-flash-lite-tts`, `gemini-3.1-flash-tts-preview`, `gemini-2.5-flash-preview-tts`), parámetros para Edge-TTS (`es-MX-DaliaNeural`, `+10%`), y cadena acústica `ENABLE_AUDIO_MASTERING=True`.
+  - `src/voice_synthesizer.py`: Integración completa de `_synthesize_gemini_tts` y `_synthesize_gemini_tts_cascade` para generar audio humano nativo PCM 24kHz. Implementación de `_master_audio` vía FFmpeg con filtros de High-Pass (80Hz), realce de presencia vocal (+2.5dB @ 3.5kHz), compresión dinámica (3:1 @ -18dB) y normalización EBU R128 (-14 LUFS). Jerarquía de fallbacks robusta y tolerante a fallos.
+  - `main.py`: Argumentos `--tts-provider {gemini, elevenlabs, edge-tts}` y `--tts-voice` expuestos en CLI y propagados a `synthesize_voice`.
+  - `.env` & `.env.example`: Sincronización de configuraciones de voz expresiva y parámetros acústicos.
+  - Pruebas y verificación: Síntesis de prueba con Gemini 3.8 Flash TTS ("Puck") completada y masterizada a 145 KB MP3 (-14 LUFS), y verificación de alineación con `faster-whisper` superada con 0.99 de confianza y generación limpia de subtítulos .srt.
+  - Producción y Publicación Pública: Video sobre "El misterio de D.B. Cooper: El hombre que se esfumo de un avion con 200.000 dolares" (9:16 vertical, 1080x1920, 67.48 MB) producido con voz humana Gemini 3.8 Flash TTS ("Puck") y publicado con éxito en los 3 canales (YouTube Shorts [Post ID: 6ac85921987e694c3c3d215e], Instagram Reels [Post ID: 6ac8592504f06b2e8f7757c7] y TikTok [Post ID: 6ac8592f987e694c3c3d26a8]) vía Buffer GraphQL API y GitHub CDN.
 
 ## Decisions & Conventions
-- **LLM Engine:** Default to Gemini 2.5 Flash via `google-genai` SDK with DeepSeek API option via OpenAI client protocol.
-- **Audio TTS:** ElevenLabs API with seamless automatic fallback to Microsoft Edge TTS (`edge-tts`) so the pipeline runs even without an active paid ElevenLabs subscription.
-- **Audio Processing:** Local `faster-whisper` for fast word/segment timestamp extraction without external cloud API cost, plus `pydub` for silence detection.
-- **Image Generation:** Google Imagen 3 (`google-genai`), Fal.ai / Replicate / Stability API, with free fallback (`pollinations`) for instantaneous testing.
-- **Video Composition:** Pure `FFmpeg` CLI commands via Python `subprocess` with escaping for Windows paths, alternating Ken Burns zoompan filters per scene, 1080p @ 30 FPS.
-- **YouTube API:** Official `google-api-python-client` with local OAuth token persistence.
+- **LLM Engine:** Cascada multi-modelo dinámica con Gemini Flash (3.8 -> 3.7 -> 3.6 -> 3.5 -> 2.5 -> flash-latest -> 3.5-lite -> 2.5-lite), con DeepSeek como opción secundaria y heurísticas bloqueadas (`ALLOW_HEURISTIC_SCRIPTS = False`).
+- **Audio TTS:** Gemini 3.8 Flash TTS nativo como proveedor primario (ultra-expresivo, humano, costo cero) con cascada de modelos Flash TTS -> ElevenLabs -> Edge-TTS (con aceleración +10% y voz conversacional).
+- **Masterización de Audio:** FFmpeg con ecualización de presencia (3.5kHz), compresión dinámica y normalización estándar TikTok a -14 LUFS.
+- **Audio Processing:** Local `faster-whisper` para timestamps exactos por palabra y subtítulos con PlayResY=1920 y MarginV=360.
+- **Image Generation:** Google Imagen 3 (`google-genai`), Fal.ai / Replicate / Stability API, y fallback con Pollinations.
+- **Video Composition:** FFmpeg nativo con efectos Ken Burns dinámicos alternados por escena en formato vertical 9:16 (1080x1920 @ 30 FPS).
+- **Publicación:** Buffer GraphQL API multicanal para YouTube Shorts, Instagram Reels y TikTok con CDN de entrega rápida.
+

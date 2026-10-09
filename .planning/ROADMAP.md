@@ -40,4 +40,17 @@
   - Integración en `main.py` con flags `--publish-all`, `--publish-platforms`, `--no-social-pack` y exportación de metadatos.
   - Verificación end-to-end exitosa con video vertical 9:16 y paquete social generado en disco.
 
+- [x] **Phase 8: Resilient Gemini Model Cascade & Anti-Heuristic AI Generation**
+  - Implementación de cascada dinámica multi-modelo en `src/config.py`: `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-2.5-flash`, `gemini-flash-latest`, `gemini-3.5-flash-lite`, `gemini-2.5-flash-lite`.
+  - Integración de `_generate_with_gemini_cascade` en `src/script_generator.py` para sortear rate limits (429) y saturación de demanda (503).
+  - Eliminación estricta de heurísticas / plantillas genéricas para guiones (`ALLOW_HEURISTIC_SCRIPTS = False` por defecto).
+  - Integración de cascada en `src/social_copywriter.py` para copys y hashtags adaptativos de alta calidad.
+  - Verificación en vivo de saltos de cascada ante 503 y generación real validada con `gemini-3.5-flash-lite`.
 
+- [x] **Phase 9: Human-Grade Voice Engine (Gemini 3.8 Flash TTS & Acoustic Mastering Chain)**
+  - Síntesis nativa ultra-humana y expresiva con Google Gemini 3.8 Flash TTS (`gemini-3.8-flash-tts`) y voces predefinidas de alta emotividad (`Puck`, `Charon`, `Aoede`, `Fenrir`).
+  - Cascada de resiliencia multi-modelo para TTS (`gemini-3.8-flash-tts` -> `gemini-3.8-flash-lite-tts` -> `gemini-3.1-flash-tts-preview` -> `gemini-2.5-flash-preview-tts` -> ElevenLabs -> Edge-TTS).
+  - Optimización de Edge-TTS con voz conversacional dinámica (`es-MX-DaliaNeural`) y aceleración de cadencia TikTok a `+10%`.
+  - Cadena de masterización acústica por hardware/FFmpeg: High-Pass (80Hz), Boost de presencia en medios/agudos (+2.5dB @ 3.5kHz), compresión dinámica (3:1 @ -18dB) y normalización EBU R128 (-14 LUFS para TikTok/Shorts/Reels).
+  - CLI unificada en `main.py` con `--tts-provider {gemini, elevenlabs, edge-tts}` y `--tts-voice <nombre_voz>`.
+  - Verificación completa con `faster-whisper` para subtítulos Ground-Truth y montaje sincronizado.

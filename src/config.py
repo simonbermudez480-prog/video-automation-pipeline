@@ -44,14 +44,71 @@ class Settings:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
     DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    GEMINI_FALLBACK_MODELS: list[str] = [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
+        "gemini-flash-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash-lite",
+    ]
+    ALLOW_HEURISTIC_SCRIPTS: bool = os.getenv("ALLOW_HEURISTIC_SCRIPTS", "false").lower() == "true"
+
+    def get_gemini_model_candidates(self) -> list[str]:
+        """
+        Retorna la lista ordenada y sin duplicados de modelos de Gemini a intentar,
+        priorizando GEMINI_MODEL y siguiendo con la cascada de fallbacks.
+        """
+        env_cascade = os.getenv("GEMINI_FALLBACK_MODELS", "")
+        if env_cascade:
+            candidates = [m.strip() for m in env_cascade.split(",") if m.strip()]
+        else:
+            candidates = list(self.GEMINI_FALLBACK_MODELS)
+
+        ordered: list[str] = []
+        if self.GEMINI_MODEL and self.GEMINI_MODEL not in ordered:
+            ordered.append(self.GEMINI_MODEL)
+        for m in candidates:
+            if m not in ordered:
+                ordered.append(m)
+        return ordered
+
 
     # --- TTS / Síntesis de Voz ---
-    TTS_PROVIDER: Literal["elevenlabs", "edge-tts"] = os.getenv("TTS_PROVIDER", "edge-tts").lower() # type: ignore
+    TTS_PROVIDER: Literal["gemini", "elevenlabs", "edge-tts"] = os.getenv("TTS_PROVIDER", "gemini").lower() # type: ignore
+    GEMINI_TTS_MODEL: str = os.getenv("GEMINI_TTS_MODEL", "gemini-3.8-flash-tts")
+    GEMINI_TTS_VOICE: str = os.getenv("GEMINI_TTS_VOICE", "Puck")
+    GEMINI_TTS_FALLBACK_MODELS: list[str] = [
+        "gemini-3.8-flash-tts",
+        "gemini-3.8-flash-lite-tts",
+        "gemini-3.1-flash-tts-preview",
+        "gemini-2.5-flash-preview-tts",
+    ]
     ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
-    EDGE_TTS_VOICE: str = os.getenv("EDGE_TTS_VOICE", "es-US-AlonsoNeural")
+    EDGE_TTS_VOICE: str = os.getenv("EDGE_TTS_VOICE", "es-MX-DaliaNeural")
+    EDGE_TTS_RATE: str = os.getenv("EDGE_TTS_RATE", "+10%")
+    ENABLE_AUDIO_MASTERING: bool = os.getenv("ENABLE_AUDIO_MASTERING", "true").lower() == "true"
     ENABLE_PHONETIC_CORRECTION: bool = os.getenv("ENABLE_PHONETIC_CORRECTION", "true").lower() == "true"
+
+    def get_gemini_tts_candidates(self) -> list[str]:
+        """Retorna la lista ordenada de modelos Gemini TTS a intentar."""
+        env_cascade = os.getenv("GEMINI_TTS_FALLBACK_MODELS", "")
+        if env_cascade:
+            candidates = [m.strip() for m in env_cascade.split(",") if m.strip()]
+        else:
+            candidates = list(self.GEMINI_TTS_FALLBACK_MODELS)
+        ordered: list[str] = []
+        if self.GEMINI_TTS_MODEL and self.GEMINI_TTS_MODEL not in ordered:
+            ordered.append(self.GEMINI_TTS_MODEL)
+        for m in candidates:
+            if m not in ordered:
+                ordered.append(m)
+        return ordered
+
 
     # --- Audio Alignment & Whisper ---
     WHISPER_MODEL: str = os.getenv("WHISPER_MODEL", "tiny")
