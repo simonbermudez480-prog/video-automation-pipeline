@@ -172,6 +172,22 @@ class BufferPublisher:
         }
         self._cached_channels: Optional[Dict[str, Dict[str, str]]] = None
 
+    def _post_with_retry(self, json_data: dict, timeout: int = 45, max_retries: int = 3) -> requests.Response:
+        """Envía una petición POST a Buffer GraphQL con reintentos automáticos ante cortes SSL o conexión."""
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(BUFFER_GRAPHQL_ENDPOINT, headers=self.headers, json=json_data, timeout=timeout)
+                return resp
+            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if attempt == max_retries - 1:
+                    logger.error("Error persistente al conectar con Buffer API tras {} intentos: {}", max_retries, e)
+                    raise
+                logger.warning(
+                    "Fallo transitorio de conexión con Buffer API (intento {}/{}): {}. Reintentando en 2.5s...",
+                    attempt + 1, max_retries, e
+                )
+                time.sleep(2.5)
+
     def get_channels(self) -> Dict[str, Dict[str, str]]:
         """Descubre automáticamente los canales y cuentas vinculadas en la organización de Buffer."""
         if self._cached_channels is not None:
@@ -189,7 +205,7 @@ class BufferPublisher:
           }
         }
         """
-        resp = requests.post(BUFFER_GRAPHQL_ENDPOINT, headers=self.headers, json={"query": q_org}, timeout=15)
+        resp = self._post_with_retry(json_data={"query": q_org}, timeout=20)
         if resp.status_code != 200:
             raise RuntimeError(f"Error al conectar con Buffer API (HTTP {resp.status_code}): {resp.text}")
 
@@ -211,7 +227,7 @@ class BufferPublisher:
           }}
         }}
         """
-        resp_ch = requests.post(BUFFER_GRAPHQL_ENDPOINT, headers=self.headers, json={"query": q_channels}, timeout=15)
+        resp_ch = self._post_with_retry(json_data={"query": q_channels}, timeout=20)
         channels_list = resp_ch.json().get("data", {}).get("channels", [])
 
         discovered = {}
@@ -251,10 +267,8 @@ class BufferPublisher:
           }
         }
         """
-        resp = requests.post(
-            BUFFER_GRAPHQL_ENDPOINT,
-            headers=self.headers,
-            json={"query": mutation, "variables": variables},
+        resp = self._post_with_retry(
+            json_data={"query": mutation, "variables": variables},
             timeout=45
         )
         data = resp.json()

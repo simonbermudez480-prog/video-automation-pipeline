@@ -67,5 +67,10 @@
   - **Híbrido de Stock Pexels & Picsum Verificado**: Búsqueda contextual en Pexels API (`_fetch_from_pexels`) + rescate verificado en Picsum HD (`_fetch_from_picsum_verified`) donde cada foto es auditada por Gemini Vision antes de ser aceptada; si no cumple, se descarta y escala al fondo procedural cinemático.
   - **Reintentos de IA con Prompts Negativos**: Si la IA generativa produce una imagen rechazada por el Gatekeeper (ej. marcas de agua o personas espurias), el pipeline reintenta con un prompt correctivo reforzado antes de activar los fallbacks.
   - **Verificación Integral y Pruebas Empíricas**: Pruebas exitosas con escenas reales rechazando adecuadamente la mujer (`scene_003.png`) y el joven en el prado (`scene_004.png`), garantizando que solo imágenes coherentes lleguen al montaje final.
+- [x] **Phase 12: Fail-Closed Vision QA, Metadata Anti-Poisoning Guardian & Pexels Smart Query Engine**
+  - **Auditoría Fail-Closed & Control de Saturación**: Blindaje de `audit_image_with_gemini_vision` con semáforo thread-safe (`_VISION_AUDIT_LOCK`) y temporizador de cortesía (1.2s) para no rebasar los límites gratuitos de la API.
+  - **Guardián de Metadatos Anti-Poisoning**: Salvaguarda automática e instantánea basada en el texto descriptivo (`alt`) y etiquetas de Pexels, eliminando a nivel de metadatos cualquier mujer, modelo, selfie o retrato fuera de contexto, permitiendo la selección de imágenes de alta fidelidad documental incluso ante agotamiento de cuota de Gemini Vision.
+  - **Búsqueda Escalonada en Pexels API**: Derivación automática de términos primarios y simplificados en orientación vertical con adaptación inteligente vía Pillow Lanczos, garantizando fotografías históricas auténticas y coherentes.
+  - **Validación End-to-End**: Producción exitosa del documental 'La historia del fundador de Louis Vuitton' (13 escenas) con 100% de imágenes contextuales reales de archivo, subido y publicado automáticamente a YouTube Shorts, Instagram Reels y TikTok.
 
 

@@ -1,17 +1,16 @@
 # Current Project State
 
 ## Status
-- **Current Phase:** Phase 11 Complete (Multimodal Vision QA Gatekeeper, Stock Pexels/Picsum Hybrid & Prompt Poisoning Sanitizer)
-- **Active Task:** Phase 11 Finalized and Verified. All generated/downloaded assets are now audited in real-time by Gemini Vision before entering video assembly, prompts are sanitized against portrait poisoning, and verified stock cascades protect against random images.
+- **Current Phase:** Phase 12 Complete & Operational
+- **Active Task:** "El espía con 27 identidades inventadas: Juan Pujol García, 'Garbo'" produced, visually audited, and successfully published to YouTube Shorts, Instagram Reels, and TikTok.
 - **Completed:**
-  - `src/script_generator.py`: Erradicación absoluta de la raíz 'portrait' en los prompts de encuadre vertical; sustitución por `vertical 9:16 framing, mobile format` e inyección obligatoria de restricciones anti-hallucination (`uninhabited scene, empty surroundings, no humans, no people, inanimate subject`) para planos generales y macro.
-  - `src/image_generator.py`: Sanitización proactiva de prompts con `re.sub(r"\bportraits?\b", "cinematic framing", ...)` garantizando que ningún modelo de difusión interprete orientación como retrato de estudio.
-  - `src/image_generator.py`: Implementación de `audit_image_with_gemini_vision`, auditor multimodal que evalúa en tiempo real cada imagen generada o descargada ante 3 descalificadores críticos (`UNWANTED_HUMAN`, `WATERMARK_OR_TEXT`, `ABSURD_DISSONANCE`) utilizando una cascada de modelos Gemini Flash (`gemini-2.5-flash` -> `gemini-3.8-flash` -> `gemini-3.7-flash` -> `gemini-3.5-flash`).
-  - `src/image_generator.py`: Implementación de `_fetch_from_pexels` para búsqueda contextual de stock documental en alta definición (orientación vertical 9:16) con `PEXELS_API_KEY`.
-  - `src/image_generator.py`: Implementación de `_fetch_from_picsum_verified`, reemplazando el rescate ciego de Picsum por un sistema con semillas temáticas curadas (paisajes, arquitectura, texturas) y validación estricta con Gemini Vision. Si la foto no es coherente, se descarta y escala al fondo procedural cinemático.
-  - `src/image_generator.py`: Lógica de reintento inteligente en IA generativa (Pollinations Flux): si el Gatekeeper detecta personas no solicitadas o marcas de agua, reintenta con un prompt correctivo reforzado (`uninhabited scene, absolutely no humans, clean frame, no watermarks`) antes de escalar a los fallbacks.
-  - `src/config.py`: Variables de configuración añadidas (`ENABLE_IMAGE_QA_GATEKEEPER`, `GEMINI_VISION_FALLBACK_MODELS`, método `get_gemini_vision_candidates`).
-  - Pruebas y verificación: Ejecución de tests empíricos con las imágenes reales del lago Toplitz, validando que el Gatekeeper detecta y rechaza con 100% de precisión a la mujer (`scene_003.png`) y al joven en el campo de margaritas (`scene_004.png`), y comprobación en vivo de que el pipeline previene imágenes absurdas.
+  - `src/buffer_publisher.py`: Resiliencia con `_post_with_retry` ejecutada sin contratiempos; publicación directa y simultánea en las 3 plataformas.
+  - `src/image_generator.py`: Auditoría visual con `_EXHAUSTED_VISION_MODELS` y Guardián de Metadatos Anti-Poisoning funcionando a máxima velocidad (tiempo de producción reducido a ~25 min).
+  - Producción y Publicación de "El Agente Garbo": Video de 22.13 MB master (`garbo_9x16_20261010_122014.mp4`), optimizado a 5.03 MB web (`_web.mp4`), hosteado en CDN de GitHub y publicado a través de Buffer API:
+    - YouTube Shorts: `6aca67c6f91f772d459cf38b`
+    - Instagram Reels: `6aca67c9f91f772d459cf3ef`
+    - TikTok: `6aca67d4f91f772d459cf594`
+  - Verificación visual multimodal: Inspección directa con `view_file` de 11 escenas fotográficas reales de alta fidelidad documental (máquina de escribir mecánica vintage con reporte 'Contact', túneles subterráneos de Londres, mapas de operaciones militares con brújula y pines, escritorio clásico con libro antiguo y lámpara de bronce, y maletas de viaje con pasaporte alusivas a su escape y vida anónima en Venezuela).
 
 ## Decisions & Conventions
 - **LLM Engine:** Cascada multi-modelo dinámica con Gemini Flash (3.8 -> 3.7 -> 3.6 -> 3.5 -> 2.5 -> flash-latest -> 3.5-lite -> 2.5-lite), con DeepSeek como opción secundaria y heurísticas bloqueadas (`ALLOW_HEURISTIC_SCRIPTS = False`).

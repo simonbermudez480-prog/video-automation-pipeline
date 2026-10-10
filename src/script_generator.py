@@ -120,7 +120,7 @@ DIRECTRICES DE COHERENCIA VISUAL (VISUAL CONTRACT & ANTI-FACE-MORPHING):
    - Debe alinearse estrictamente con el 'visual_contract' y especificar el ángulo de cámara ('shot_type').
    - Formato {aspect_ratio}: {'vertical 9:16 framing, mobile safe zone' if is_vertical else 'cinematic 16:9 widescreen'}.
    - Termina siempre especificando: 'cinematic film still, photorealistic, 8k, no text, no watermark, no captions'.
-10. Para cada escena, incluye 'search_keywords' con 3 a 6 términos clave en inglés para archivo documental o histórico.
+10. Para cada escena, incluye 'search_keywords' con 2 a 4 términos esenciales y directos en inglés que representen el objeto, vehículo, lugar o sujeto físico tangible (ej: 'vintage coach bus', 'hotel ballroom', 'signing contract pen', 'vintage race car'), evitando frases largas para que las APIs de archivo fotográfico encuentren coincidencias exactas.
 11. Metadatos optimizados para YouTube: Título con alto gancho emocional (añade '#Shorts' si es 9:16), descripción completa y tags relevantes.
 """
 

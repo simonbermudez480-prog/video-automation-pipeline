@@ -5,7 +5,11 @@ env/
 
 # Archivos de credenciales y secretos (Protección de claves de API)
 .env
+*.env
+*.env.*
+.env.*
 client_secret*.json
+token.json
 
 # Caché de Python
 __pycache__/

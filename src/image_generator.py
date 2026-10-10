@@ -15,6 +15,7 @@ import os
 import re
 import json
 import time
+import threading
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -300,6 +301,11 @@ def _fetch_from_wikimedia_commons(prompt: str, output_path: Path, scene_id: int,
     return False
 
 
+_VISION_AUDIT_LOCK = threading.Lock()
+_LAST_VISION_AUDIT_TIME = 0.0
+_EXHAUSTED_VISION_MODELS: set[str] = set()
+
+
 def audit_image_with_gemini_vision(
     image_path: Path,
     scene_text: str = "",
@@ -310,9 +316,10 @@ def audit_image_with_gemini_vision(
     Audita una imagen generada o descargada usando Gemini Vision para certificar:
     1. Cero humanos/mujeres fuera de contexto (especialmente en planos de ambiente o macro).
     2. Cero marcas de agua, logos comerciales o texto superpuesto no deseado.
-    3. Coherencia semántica real con la narración y el tema (evita personas modernas o fotos desconectadas).
+    3. Coherencia semántica real con la narración y el tema (rechaza fotos absurdas o desconectadas).
 
-    Retorna (aprobado: bool, razon: str, problemas_detectados: list[str]).
+    POLÍTICA FAIL-CLOSED: Si los modelos de visión están saturados temporalmente tras los reintentos,
+    la imagen NO se aprueba; se descarta por seguridad para evitar imágenes disonantes.
     """
     if not getattr(settings, "ENABLE_IMAGE_QA_GATEKEEPER", True):
         return True, "Auditoría de visión deshabilitada", []
@@ -337,16 +344,16 @@ def audit_image_with_gemini_vision(
         logger.warning("No se pudo cargar la imagen para auditoría visual: {}", img_err)
         return False, f"Error cargando imagen: {img_err}", ["LOAD_ERROR"]
 
-    audit_prompt = f"""You are an expert QA inspector for historical and educational documentary videos.
-Audit this generated/downloaded image for Scene Context:
+    audit_prompt = f"""You are an uncompromising QA inspector for historical and educational documentary videos.
+Audit this candidate image for Scene Context:
 - Narration: "{scene_text}"
 - Shot Type: "{shot_type or 'unspecified'}"
 - Intended Subject: "{scene_prompt}"
 
 Evaluate 3 critical disqualifiers:
-1. UNWANTED_HUMAN: Does the image feature an accidental or out-of-context person, woman, or man when the intended shot is an environmental/macro/nature/artifact scene without specified characters? (If shot_type is environmental_wide or macro_detail, any human is strictly forbidden).
-2. WATERMARK_OR_TEXT: Does the image contain visible watermarks (such as 'pollinations.ai', 'shutterstock', stock logos), intrusive text overlays, subtitles, or modern website logos?
-3. ABSURD_DISSONANCE: Is the image completely irrelevant or absurdly disconnected from the narration (e.g. a modern person in flowers for a WW2 documentary, or a random animal)?
+1. UNWANTED_HUMAN: Does the image feature an accidental, modern, or out-of-context person, woman, or man when the intended shot is an environmental/macro/nature/artifact scene without specified characters? (If shot_type is environmental_wide or macro_detail, any human is strictly forbidden. If the scene is about historical events or military figures, any random modern woman, model, or selfie is strictly forbidden).
+2. WATERMARK_OR_TEXT: Does the image contain visible watermarks (such as 'pollinations.ai', 'shutterstock', stock logos), intrusive text overlays, subtitles, website URLs, or modern branding?
+3. ABSURD_DISSONANCE: Is the image completely irrelevant or disconnected from the narration? (For example: house plants, pets, dogs, succulents, domestic interiors, libraries, or kitchen items when the narration is about historical battles, diplomacy, naval ships, islands, or warfare). The image must tangibly or atmospherically fit the described scene.
 
 Output strictly in JSON format:
 {{
@@ -356,39 +363,58 @@ Output strictly in JSON format:
 }}
 """
 
-    for model in candidate_models:
-        try:
-            resp = client.models.generate_content(
-                model=model,
-                contents=[img, audit_prompt],
-                config={"response_mime_type": "application/json"}
-            )
-            raw_text = resp.text or "{}"
-            data = json.loads(raw_text)
-            approved = bool(data.get("approved", True))
-            reason = str(data.get("reason", "Aprobado"))
-            issues = list(data.get("detected_issues", []))
-
-            if not approved:
-                logger.warning(
-                    "[Guardián QA Vision] Imagen '{}' RECHAZADA por '{}' (Problemas: {}): {}",
-                    image_path.name, model, ", ".join(issues) or "Inconsistencia", reason
-                )
-            else:
-                logger.info(
-                    "[Guardián QA Vision] Imagen '{}' APROBADA por '{}': {}",
-                    image_path.name, model, reason
-                )
-            return approved, reason, issues
-        except Exception as e:
-            err_msg = str(e)
-            if "503" in err_msg or "429" in err_msg:
-                logger.debug("Modelo Gemini Vision '{}' con alta carga o cuota, probando siguiente...", model)
+    global _LAST_VISION_AUDIT_TIME, _EXHAUSTED_VISION_MODELS
+    with _VISION_AUDIT_LOCK:
+        for model in candidate_models:
+            if model in _EXHAUSTED_VISION_MODELS:
                 continue
-            logger.warning("Error en auditoría visual con Gemini modelo '{}': {}. Probando siguiente...", model, e)
 
-    logger.warning("Guardián QA Vision: Modelos de visión no disponibles temporalmente; permitiendo imagen como fallback.")
-    return True, "Modelos de visión no disponibles", []
+            # Pacing governor: garantizar al menos 1.2s entre peticiones para proteger el rate limit gratuito
+            elapsed = time.time() - _LAST_VISION_AUDIT_TIME
+            if elapsed < 1.2:
+                time.sleep(1.2 - elapsed)
+            _LAST_VISION_AUDIT_TIME = time.time()
+
+            try:
+                resp = client.models.generate_content(
+                    model=model,
+                    contents=[img, audit_prompt],
+                    config={"response_mime_type": "application/json"}
+                )
+                raw_text = resp.text or "{}"
+                data = json.loads(raw_text)
+                approved = bool(data.get("approved", True))
+                reason = str(data.get("reason", "Aprobado"))
+                issues = list(data.get("detected_issues", []))
+
+                if not approved:
+                    logger.warning(
+                        "[Guardián QA Vision] Imagen '{}' RECHAZADA por '{}' (Problemas: {}): {}",
+                        image_path.name, model, ", ".join(issues) or "Inconsistencia", reason
+                    )
+                else:
+                    logger.info(
+                        "[Guardián QA Vision] Imagen '{}' APROBADA por '{}': {}",
+                        image_path.name, model, reason
+                    )
+                return approved, reason, issues
+            except Exception as e:
+                err_msg = str(e)
+                if "RESOURCE_EXHAUSTED" in err_msg or "per_day" in err_msg or "PerDay" in err_msg or "quota" in err_msg.lower():
+                    logger.warning("Modelo Gemini Vision '{}' agotó su cuota (RESOURCE_EXHAUSTED). Marcado como no disponible para esta sesión.", model)
+                    _EXHAUSTED_VISION_MODELS.add(model)
+                    continue
+                elif "503" in err_msg or "429" in err_msg or "UNAVAILABLE" in err_msg:
+                    logger.debug("Modelo Gemini Vision '{}' temporalmente no disponible: {}. Probando siguiente en cascada...", model, e)
+                    continue
+                logger.warning("Error en auditoría visual con Gemini modelo '{}': {}. Probando siguiente...", model, e)
+                continue
+
+    logger.warning(
+        "Guardián QA Vision: Modelos de visión saturados temporalmente. POLÍTICA FAIL-CLOSED: La imagen '{}' se descarta por seguridad para evitar imágenes disonantes.",
+        image_path.name
+    )
+    return False, "Modelos de visión saturados o inaccesibles (Fail-Closed)", ["VISION_UNAVAILABLE"]
 
 
 def _fetch_from_pexels(
@@ -396,48 +422,133 @@ def _fetch_from_pexels(
     keywords: str,
     output_path: Path,
     aspect_ratio: str = "16:9",
+    scene_text: str = "",
+    shot_type: Optional[str] = None,
 ) -> bool:
     """
     Obtiene fotografías de stock documental en alta resolución de Pexels API
-    usando las palabras clave temáticas de la escena y orientación portrait/landscape.
+    usando una cascada inteligente de consultas (específica -> simplificada -> sin filtro de orientación)
+    y auditando cada candidato en tiempo real con el Guardián Gemini Vision.
     """
     api_key = getattr(settings, "PEXELS_API_KEY", "") or os.getenv("PEXELS_API_KEY", "")
     if not api_key:
         logger.debug("Pexels API key no configurada (PEXELS_API_KEY). Saltando Pexels.")
         return False
 
-    query = keywords or _extract_keywords_from_prompt(prompt)
-    orientation = "portrait" if aspect_ratio == "9:16" else "landscape"
-    url = f"https://api.pexels.com/v1/search?query={urllib.parse.quote(query)}&orientation={orientation}&per_page=5"
+    is_vertical = aspect_ratio == "9:16"
     headers = {
         "Authorization": api_key,
         "User-Agent": "EducationalVideoBot/1.0 (educational documentary video)"
     }
 
-    logger.info("Consultando Pexels API ('{}', orientación: {})...", query, orientation)
-    try:
-        resp = requests.get(url, headers=headers, timeout=12)
-        if resp.status_code == 200:
-            data = resp.json()
-            photos = data.get("photos", [])
-            for p in photos:
+    # 1. Construir cascada inteligente de términos de búsqueda
+    primary_query = (keywords or "").strip()
+    extracted_prompt_query = _extract_keywords_from_prompt(prompt)
+
+    query_candidates: list[str] = []
+    if primary_query:
+        query_candidates.append(primary_query)
+        words = primary_query.split()
+        if len(words) > 2:
+            query_candidates.append(" ".join(words[:2]))
+            query_candidates.append(" ".join(words[-2:]))
+
+    if extracted_prompt_query and extracted_prompt_query not in query_candidates:
+        query_candidates.append(extracted_prompt_query)
+
+    # Añadir variantes simplificadas sin fechas numéricas o adjetivos específicos
+    for q in list(query_candidates):
+        cleaned = re.sub(r"\b(1980s|1982|1940s|1945|south africa|kyalami)\b", "", q, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if cleaned and len(cleaned) > 3 and cleaned not in query_candidates:
+            query_candidates.append(cleaned)
+
+    # 2. Estrategias escalonadas y ágiles (máximo 2-3 intentos para evitar saturar rate limits):
+    search_strategies: list[tuple[str, str]] = []
+    target_orientation = "portrait" if is_vertical else "landscape"
+    if query_candidates:
+        search_strategies.append((query_candidates[0], target_orientation))
+        if len(query_candidates) > 1:
+            search_strategies.append((query_candidates[1], target_orientation))
+        search_strategies.append((query_candidates[0], ""))  # Orientación abierta (se ajusta con Lanczos)
+
+    logger.info("Búsqueda ágil en Pexels API ({} estrategias preparadas)...", len(search_strategies))
+
+    for query, orientation in search_strategies:
+        orient_param = f"&orientation={orientation}" if orientation else ""
+        url = f"https://api.pexels.com/v1/search?query={urllib.parse.quote(query)}{orient_param}&per_page=3"
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code != 200:
+                continue
+
+            photos = resp.json().get("photos", [])
+            if not photos:
+                continue
+
+            for p in photos[:2]:
                 src = p.get("src", {})
                 img_url = src.get("large2x") or src.get("large") or src.get("portrait") or src.get("original")
-                if img_url:
-                    dl = requests.get(img_url, timeout=15)
-                    if dl.status_code == 200 and len(dl.content) > 10000:
-                        output_path.write_bytes(dl.content)
-                        _normalize_image_to_resolution(output_path, aspect_ratio)
-                        logger.success("Fotografía de stock contextual obtenida de Pexels API: {}", p.get("alt", p.get("id")))
+                if not img_url:
+                    continue
+
+                dl = requests.get(img_url, timeout=10)
+                if dl.status_code != 200 or len(dl.content) < 10000:
+                    continue
+
+                output_path.write_bytes(dl.content)
+                _normalize_image_to_resolution(output_path, aspect_ratio)
+
+                # Auditoría ágil con el Guardián Gemini Vision
+                approved, reason, issues = audit_image_with_gemini_vision(
+                    output_path,
+                    scene_text=scene_text or prompt,
+                    scene_prompt=prompt,
+                    shot_type=shot_type,
+                )
+
+                if approved:
+                    logger.success(
+                        "Fotografía de stock de Pexels APROBADA por el Guardián Gemini Vision para '{}': {}",
+                        query, p.get("alt", p.get("id"))
+                    )
+                    return True
+
+                # Salvaguarda inteligente: Si la cuota diaria de Gemini Vision se agotó (20 req/día),
+                # validar rigurosamente los metadatos y curaduría de Pexels para evitar fotos negras procedurales.
+                if "VISION_UNAVAILABLE" in issues:
+                    alt_desc = (p.get("alt") or "").lower()
+                    toxic_tokens = [
+                        "woman", "girl", "female", "lady", "model", "portrait", "bikini", "lingerie",
+                        "looking at camera", "selfie", "dog", "puppy", "cat", "kitten", "pet", "pets",
+                        "wedding", "bride", "groom", "baby", "infant", "toddler", "fashion", "dress",
+                        "sunglasses", "glasses", "pose", "posing", "studio", "modern"
+                    ]
+                    has_toxic_token = any(tok in alt_desc for tok in toxic_tokens)
+                    if not has_toxic_token:
+                        logger.success(
+                            "Fotografía de stock de Pexels APROBADA por Guardián de Metadatos (Anti-Poisoning) para '{}': {}",
+                            query, p.get("alt", p.get("id"))
+                        )
                         return True
-        elif resp.status_code == 401:
-            logger.warning("Pexels API Key inválida o no autorizada.")
-        else:
-            logger.warning("Pexels API respondió HTTP {}", resp.status_code)
-        return False
-    except Exception as e:
-        logger.warning("Fallo al consultar Pexels API ('{}'): {}", query, e)
-        return False
+                    else:
+                        logger.warning(
+                            "Candidato de Pexels ('{}') descartado por Guardián de Metadatos (humano/elemento no deseado). Evaluando siguiente...",
+                            p.get("alt", p.get("id"))
+                        )
+                        continue
+
+                logger.warning(
+                    "Candidato de Pexels ('{}') rechazado por el Guardián ({}): {}.",
+                    p.get("alt", p.get("id")), ", ".join(issues) or "Inconsistencia", reason
+                )
+        except Exception as e:
+            logger.debug("Error en intento Pexels ('{}'): {}", query, e)
+            continue
+
+    logger.warning("No se encontró ninguna imagen de Pexels que superara la auditoría del Guardián.")
+    return False
 
 
 def _fetch_from_nasa_archive(prompt: str, output_path: Path, scene_id: int, aspect_ratio: str = "16:9") -> bool:
@@ -445,13 +556,11 @@ def _fetch_from_nasa_archive(prompt: str, output_path: Path, scene_id: int, aspe
     Obtiene fotografías científicas reales en alta resolución del archivo oficial de la NASA.
     Solo se activa si el tema o prompt contiene términos astronómicos o cosmológicos explícitos.
     """
-    p_lower = prompt.lower()
-    space_indicators = [
-        "space", "galaxy", "nebula", "universe", "star", "astronomy",
-        "cosmic", "black hole", "telescope", "planet", "solar system",
-        "multiverse", "quantum", "everett"
-    ]
-    if not any(k in p_lower for k in space_indicators):
+    space_pattern = re.compile(
+        r"\b(space|galaxy|galaxies|nebula|universe|stars?|astronomy|cosmic|black hole|telescope|planets?|solar system|multiverse|quantum|everett)\b",
+        re.IGNORECASE
+    )
+    if not space_pattern.search(prompt):
         return False
 
     logger.info("Consultando archivo fotográfico oficial de la NASA...")
@@ -498,10 +607,10 @@ def _fetch_from_picsum_verified(
     target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
     logger.info("Descargando y auditando fotografía documental (Picsum HD + Gemini QA)...")
 
-    # IDs curados de Picsum que corresponden a paisajes, agua, montañas, texturas y arquitectura
+    # IDs curados de Picsum que corresponden a paisajes puros, agua, montañas, texturas y arquitectura abierta
     curated_nature_ids = [
         10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 28, 29, 37, 42, 49,
-        54, 57, 58, 59, 110, 111, 116, 122, 129, 137, 142, 152, 164,
+        58, 59, 110, 111, 116, 122, 129, 137, 142, 152, 164,
         175, 184, 197, 214, 219, 225, 235, 248, 256, 260, 274, 287
     ]
 
@@ -675,16 +784,16 @@ def generate_single_image(
                     if appr2:
                         return True
 
-    # 4. Pexels API (fotografía documental contextual real en alta definición)
-    if _fetch_from_pexels(prompt, keywords or "", output_path, aspect_ratio=aspect_ratio):
-        approved, reason, _ = audit_image_with_gemini_vision(
-            output_path,
-            scene_text=scene_text or prompt,
-            scene_prompt=prompt,
-            shot_type=shot_type,
-        )
-        if approved:
-            return True
+    # 4. Pexels API (fotografía documental contextual real en alta definición auditada candidato a candidato)
+    if _fetch_from_pexels(
+        prompt=prompt,
+        keywords=keywords or "",
+        output_path=output_path,
+        aspect_ratio=aspect_ratio,
+        scene_text=scene_text or prompt,
+        shot_type=shot_type,
+    ):
+        return True
 
     # 5. NASA Deep Space Archive (fotografías espaciales reales, si es tema astronómico o cosmológico)
     if _fetch_from_nasa_archive(prompt, output_path, scene_id, aspect_ratio=aspect_ratio):

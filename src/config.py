@@ -123,15 +123,13 @@ class Settings:
     POLLINATIONS_API_KEY: str = os.getenv("POLLINATIONS_API_KEY", "")
     PEXELS_API_KEY: str = os.getenv("PEXELS_API_KEY", "")
     IMAGE_ASPECT_RATIO: str = os.getenv("IMAGE_ASPECT_RATIO", "16:9")
-    CONCURRENT_IMAGE_WORKERS: int = int(os.getenv("CONCURRENT_IMAGE_WORKERS", "4"))
+    CONCURRENT_IMAGE_WORKERS: int = int(os.getenv("CONCURRENT_IMAGE_WORKERS", "2"))
     ENABLE_IMAGE_ENHANCEMENT: bool = os.getenv("ENABLE_IMAGE_ENHANCEMENT", "true").lower() in ("true", "1", "yes")
     ENABLE_IMAGE_QA_GATEKEEPER: bool = os.getenv("ENABLE_IMAGE_QA_GATEKEEPER", "true").lower() in ("true", "1", "yes")
     GEMINI_VISION_FALLBACK_MODELS: list[str] = [
         "gemini-2.5-flash",
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
-        "gemini-3.5-flash",
         "gemini-flash-latest",
+        "gemini-2.5-flash-lite",
     ]
 
     def get_gemini_vision_candidates(self) -> list[str]:
