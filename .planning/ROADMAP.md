@@ -127,3 +127,11 @@
     - Limitación observada: en imágenes límite (Chernóbil escenas 4, 9, 10, 12) el veredicto cambia entre pasadas; es variabilidad del modelo. Posible mejora futura: voto por mayoría de 2–3 llamadas solo para imágenes dudosas.
   - [x] 17.6 Verificado (2026-10-15) sin publicar nada real: (a) con visión simulada caída el trabajo queda en cola (1 intento); (b) con visión real re-audita, aprueba 1/2/5, rechaza 3/4, fusiona {3→2, 4→2}, re-monta (30,0 s con audio completo), llama una vez a la publicación simulada y pasa a `done/`; (c) `main.py` real con `--skip-*` y `--publish-platforms youtube` encola el video (`quality_report` = `queued`); la entrada de prueba se retiró de `output/queue/`; (d) `--process-queue` con cola vacía funciona. Tarea programada documentada en el README (no creada).
     - Fallos encontrados y corregidos en la verificación: en Git Bash `isatty()` es verdadero aunque no haya entrada y `input()` lanzaba `EOFError`; las escenas sin registro en el manifiesto contaban como "sin revisar" para el control pero no para la cola.
+
+- [x] **Phase 18: Interfaz de escritorio** (Requisitos: FR-15)
+  - [x] 18.1 Soporte en `main.py`: `quality_report.json` siempre, `--publish-job`, resultado de publicación en `publication.json` (FR-15.5).
+  - [x] 18.2 Ventana `app.py` con pestañas Crear, Revisar y publicar, Historial, Cola y estado (FR-15.1–15.4).
+  - [x] 18.3 Lanzador `Abrir_Videos_Educativos.bat` (sin consola).
+  - [x] 18.4 Verificado (2026-10-15): capturas reales de las 4 pestañas en `screenshots/fase18_tab*.png` revisadas (texto legible, buen contraste, estados en color); `publish_job` con publicación simulada (éxito → "Publicado"; fallo → conserva el veredicto del control y muestra "Error al publicar"); el ejecutor de la ventana lee el progreso de `main.py` (`--dry-run`); el lanzador abre `pythonw app.py` sin consola. Corregido en la verificación: barra de progreso poco visible; carpetas de prueba antiguas que aparecían como "En cola".
+    - Los trabajos publicados antes de la Fase 18 (Chernóbil y Poyais) recibieron `quality_report.json` y `publication.json` con sus IDs reales de Buffer para que aparezcan en el historial.
+    - Tkinter no tiene modo oscuro del sistema: la ventana usa un tema claro fijo de alto contraste.

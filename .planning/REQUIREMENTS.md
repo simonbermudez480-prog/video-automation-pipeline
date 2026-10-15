@@ -114,3 +114,13 @@
 - **FR-14.4 Cola de publicación diferida (Capa 2):** Si al terminar el video alguna escena queda `unaudited` (sin capacidad de revisión), el trabajo no se descarta: se guarda en una cola (`output/queue/`) con todo lo necesario para publicar. Un comando `python main.py --process-queue` re-audita las escenas pendientes y, si el control de calidad pasa, publica sin intervención. Pensado para ejecutarse con una tarea programada de Windows cada pocas horas.
 - **FR-14.5 Seguridad de la cola:** La cola nunca publica un video que no pase el control completo (FR-12). Un video rechazado por la revisión (no solo sin revisar) sale de la cola y queda `needs_review`.
 - **Criterio de aceptación:** (a) con los 3 modelos originales agotados, la auditoría por lote del Emú obtiene veredicto de otro modelo; (b) un video sin revisión posible queda en cola y se publica al procesar la cola cuando hay cuota (probado sin publicar de verdad, con publicación simulada).
+
+### FR-15: Interfaz de escritorio para usuarios sin comandos (Fase 18)
+**Decisión (2026-10-15):** ventana de escritorio con Tkinter (incluido en Python, sin instalar nada), en español, que se abre con doble clic en `Abrir_Videos_Educativos.bat`. Usa el mismo pipeline (`main.py`) por debajo.
+
+- **FR-15.1 Crear video:** campo de tema, duración (minutos) y botón "Crear video". Muestra el progreso por pasos (guion, voz, alineación, imágenes, montaje) y un registro legible; permite cancelar. No publica: el video queda listo para revisión.
+- **FR-15.2 Revisar y publicar:** lista de videos pendientes con la hoja de contacto, el resultado del control de calidad (motivos y escenas fusionadas), botón "Ver video" y botones "Publicar en las 3 cuentas" (con confirmación) y "Descartar" (no borra archivos). Si el control falló, se avisa claramente antes de permitir publicar.
+- **FR-15.3 Historial y enlaces:** tabla de videos con fecha, estado (pendiente, publicado, descartado, en cola) y enlaces de YouTube, Instagram y TikTok; los enlaces se obtienen de Buffer con un botón "Actualizar enlaces" y se abren con doble clic.
+- **FR-15.4 Cola y estado:** trabajos en la cola diferida con botón "Procesar cola"; saldo de Pollen y espacio libre en disco, con aviso si queda poco.
+- **FR-15.5 Soporte en main.py:** `quality_report.json` se escribe siempre (no solo al publicar); nueva opción `--publish-job CARPETA` para publicar un video ya producido; `publish_social` devuelve el resultado y se guarda en `publication.json` del trabajo.
+- **Criterio de aceptación:** capturas reales de las 4 pestañas revisadas visualmente (legibilidad y contraste); flujo crear → revisar → publicar probado con publicación simulada; el lanzador abre la ventana sin consola de comandos.

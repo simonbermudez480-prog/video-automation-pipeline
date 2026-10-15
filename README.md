@@ -213,3 +213,14 @@ schtasks /Create /TN "VideosEducativos-Cola" /SC HOURLY /MO 3 /TR "cmd /c cd /d 
 ```
 
 Con `--no-approval` en la tarea se omite la confirmación también para trabajos encolados que la pedían; quítalo si quieres seguir aprobando a mano.
+
+## 🖥️ Interfaz sin comandos (`Abrir_Videos_Educativos.bat`)
+
+Doble clic en **`Abrir_Videos_Educativos.bat`** abre la ventana de Videos Educativos (sin consola). Tiene cuatro pestañas:
+
+1. **Crear video:** escribe el tema, elige la duración y pulsa *Crear video*. Muestra el avance por pasos (guion, voz, subtítulos, imágenes, montaje). No publica nada.
+2. **Revisar y publicar:** hoja de contacto, resultado del control de calidad, *Ver video*, *Publicar en YouTube, Instagram y TikTok* (pide confirmación) y *Descartar* (no borra archivos).
+3. **Historial:** videos producidos y publicados con enlaces; *Actualizar enlaces* los consulta en Buffer y el doble clic los abre.
+4. **Cola y estado:** espacio libre en disco, saldo de Pollen y la cola de publicación diferida con *Procesar cola ahora*.
+
+Por debajo usa `main.py` (`--publish-job CARPETA` publica un video ya producido).

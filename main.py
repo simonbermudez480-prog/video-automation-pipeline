@@ -122,8 +122,11 @@ def publish_social(
     privacy: Optional[str],
     llm_provider: Optional[str],
     duration_minutes: Optional[float],
-) -> None:
-    """Redacta los copies con IA y publica/empaqueta el video (usado por el flujo normal y por la cola)."""
+) -> Optional[dict]:
+    """
+    Redacta los copies con IA y publica/empaqueta el video (usado por el flujo normal, la cola y la interfaz).
+    Retorna el resultado por plataforma ({plataforma: {status, post_id, ...}}) o None si falló.
+    """
     try:
         social_bundle = generate_social_copy(
             topic=topic,
@@ -142,14 +145,59 @@ def publish_social(
         )
         if "youtube" in pub_results and pub_results["youtube"].get("url"):
             logger.success("Video disponible en YouTube: {}", pub_results["youtube"]["url"])
+        return pub_results
     except Exception as e:
         logger.error("Error durante la generación de copies o publicación social: {}", e)
+        return None
+
+
+def save_publication(job_dir: Path, platforms: List[str], results: Optional[dict]) -> None:
+    """Guarda en publication.json el resultado de la publicación (IDs de Buffer) para el historial."""
+    results = results or {}
+    data = {
+        "published_at": datetime.now().isoformat(timespec="seconds"),
+        "platforms": {
+            p: {k: results.get(p, {}).get(k) for k in ("status", "post_id", "message")} for p in platforms
+        },
+    }
+    (job_dir / "publication.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def publish_job(job_dir: Path, platforms: List[str], privacy: Optional[str], llm_provider: Optional[str]) -> bool:
+    """Publica un video ya producido a partir de su carpeta de trabajo (usado por la interfaz con --publish-job)."""
+    report_path = job_dir / "quality_report.json"
+    if not report_path.exists():
+        logger.error("La carpeta {} no tiene quality_report.json; no se puede publicar.", job_dir)
+        return False
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    script_path = next((p for p in (job_dir / "aligned_scenes.json", job_dir / "script.json") if p.exists()), None)
+    if not script_path:
+        logger.error("La carpeta {} no tiene guion.", job_dir)
+        return False
+    script = ScriptOutput.model_validate_json(script_path.read_text(encoding="utf-8"))
+    duration = (script.scenes[-1].end_time or 0) / 60.0 if script.scenes and script.scenes[-1].end_time else None
+    results = publish_social(
+        topic=report.get("topic", ""),
+        narration_full=script.narration_full,
+        video_path=Path(report["video_path"]),
+        platforms=platforms,
+        create_social_pack=False,
+        privacy=privacy,
+        llm_provider=llm_provider,
+        duration_minutes=duration,
+    )
+    save_publication(job_dir, platforms, results)
+    ok = bool(results) and all((results.get(p) or {}).get("status") == "success" for p in platforms)
+    if ok:  # si falla, el reporte conserva el veredicto del control; el fallo queda en publication.json
+        report["status"] = "published"
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return ok
 
 
 def publish_queued(entry: dict, video_path: Path) -> None:
     """Publica un trabajo de la cola diferida con las opciones guardadas al encolarlo."""
     script = ScriptOutput.model_validate_json(Path(entry["script_path"]).read_text(encoding="utf-8"))
-    publish_social(
+    results = publish_social(
         topic=entry["topic"],
         narration_full=script.narration_full,
         video_path=video_path,
@@ -159,6 +207,13 @@ def publish_queued(entry: dict, video_path: Path) -> None:
         llm_provider=entry.get("llm_provider"),
         duration_minutes=entry.get("duration_minutes"),
     )
+    job_dir = Path(entry["job_dir"])
+    save_publication(job_dir, entry["platforms"], results)
+    report_path = job_dir / "quality_report.json"
+    if report_path.exists():
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report["status"] = "published"
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: int, total_jobs: int) -> Path:
@@ -304,6 +359,21 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
     # Control de calidad visual (FR-12 / FR-14.6): decide qué escenas se fusionan antes del montaje
     contact_sheet = OUTPUT_DIR / "review" / f"{target_video_path.stem}_contact.png"
     gate = run_quality_gate(image_paths, contact_sheet) if image_paths else None
+    quality_report = {}
+    if gate:
+        # Se escribe siempre: la interfaz lo usa para revisar y publicar videos ya producidos
+        quality_report = {
+            "topic": topic,
+            "title": script_data.metadata.title,
+            "video_path": str(target_video_path),
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "status": "passed" if gate.passed else "needs_review",
+            "reasons": gate.reasons,
+            "failing_scenes": sorted(gate.failing_scenes),
+            "merged_scenes": {str(k): v for k, v in sorted(gate.merges.items())},
+            "contact_sheet": str(contact_sheet),
+        }
+        (job_dir / "quality_report.json").write_text(json.dumps(quality_report, ensure_ascii=False, indent=2), encoding="utf-8")
     assembly_scenes, assembly_images = (
         apply_scene_merges(script_data.scenes, image_paths, gate.merges) if gate else (script_data.scenes, image_paths)
     )
@@ -348,13 +418,6 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
 
     # Control de calidad visual previo a publicar (FR-12): bloquea la publicación automática si falla
     if platforms_to_publish and gate:
-        quality_report = {
-            "status": "passed" if gate.passed else "needs_review",
-            "reasons": gate.reasons,
-            "failing_scenes": sorted(gate.failing_scenes),
-            "merged_scenes": {str(k): v for k, v in sorted(gate.merges.items())},
-            "contact_sheet": str(contact_sheet),
-        }
         approved = gate.passed and not args.require_approval
         images_dir = image_paths[0].parent
         if not gate.passed and gate.unaudited:
@@ -403,7 +466,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             job_index,
             total_jobs,
         )
-        publish_social(
+        pub_results = publish_social(
             topic=topic,
             narration_full=script_data.narration_full,
             video_path=final_video,
@@ -413,6 +476,11 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             llm_provider=args.llm_provider,
             duration_minutes=args.duration_minutes,
         )
+        if platforms_to_publish:
+            save_publication(job_dir, platforms_to_publish, pub_results)
+            if quality_report:
+                quality_report["status"] = "published"
+                (job_dir / "quality_report.json").write_text(json.dumps(quality_report, ensure_ascii=False, indent=2), encoding="utf-8")
     else:
         logger.info(
             "\n>>> [{}/{}] [PASO 6/6] Publicación social omitida (usa --publish-all o --publish para publicar en Shorts, Reels y TikTok).",
@@ -616,6 +684,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Procesar la cola de publicación diferida (output/queue/): re-auditar, re-montar y publicar lo que pase el control",
     )
     parser.add_argument(
+        "--publish-job",
+        type=str,
+        default=None,
+        metavar="CARPETA",
+        help="Publicar un video ya producido a partir de su carpeta de trabajo (assets/jobs/...), usado por la interfaz",
+    )
+    parser.add_argument(
         "--no-approval",
         dest="require_approval",
         action="store_false",
@@ -653,6 +728,10 @@ def main() -> None:
         if args.process_queue:
             process_queue(publish_queued, require_approval=args.require_approval)
             return
+        if args.publish_job:
+            platforms = [p.lower() for p in args.publish_platforms] if args.publish_platforms else ["youtube", "instagram", "tiktok"]
+            ok = publish_job(Path(args.publish_job), platforms, args.privacy, args.llm_provider)
+            sys.exit(0 if ok else 1)
         execute_pipeline(args)
     except KeyboardInterrupt:
         logger.warning("\nOperación cancelada por el usuario.")
