@@ -9,6 +9,7 @@ Aplica:
 6. Exportación en 1080p, 30 FPS.
 """
 import os
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -20,12 +21,28 @@ from src.script_generator import Scene
 
 TRANSITION_DURATION = 0.5  # Duración del fundido cruzado en segundos
 
+# Gradación uniforme por video (FR-13.2): unifica fotos de archivo, stock e IA en un mismo look
+ARCHIVAL_ERA_CUTOFF = 1960  # épocas anteriores: look monocromo cálido, como las fotos de archivo
+GRADE_FILTERS = {
+    "archival": "hue=s=0,colorbalance=rs=0.10:gs=0.04:bs=-0.08:rm=0.08:gm=0.03:bm=-0.06,eq=contrast=1.08",
+    "cinematic": "eq=saturation=0.82:contrast=1.05,colorbalance=rs=-0.04:bs=0.05:rh=0.05:bh=-0.04",
+}
+GRAIN_AND_VIGNETTE = "noise=alls=6:allf=t+u,vignette=PI/5"
+
+
+def choose_look(visual_contract: Optional[object]) -> str:
+    """Elige el look del video según la época del VisualContract."""
+    era = getattr(visual_contract, "era_setting", "") or ""
+    years = [int(y) for y in re.findall(r"\b(1[0-9]{3}|20[0-9]{2})s?\b", era)]
+    return "archival" if years and min(years) < ARCHIVAL_ERA_CUTOFF else "cinematic"
+
 
 def _get_dynamic_ken_burns_filter(
     scene_index: int,
     num_frames: int,
     fps: int,
     resolution: str,
+    look: Optional[str] = None,
 ) -> str:
     """
     Genera la cadena de filtros zoompan de FFmpeg con movimiento CONTINUO y fluido,
@@ -94,7 +111,8 @@ def _get_dynamic_ken_burns_filter(
         f"scale={buf_w}:{buf_h}:force_original_aspect_ratio=increase,"
         f"crop={buf_w}:{buf_h},"
         f"zoompan=z='{zoom_expr}':x='{x_expr}':y='{y_expr}':d={num_frames}:s={resolution}:fps={fps},"
-        f"format=yuv420p"
+        + (f"{GRADE_FILTERS[look]},{GRAIN_AND_VIGNETTE}," if look else "")
+        + "format=yuv420p"
     )
     return filter_graph
 
@@ -108,6 +126,7 @@ def render_scene_clip(
     fps: int = 30,
     resolution: str = "1920x1080",
     threads: int = 2,
+    look: Optional[str] = None,
 ) -> Path:
     """
     Renderiza un clip de video individual para una escena con efecto Ken Burns continuo.
@@ -116,7 +135,7 @@ def render_scene_clip(
     output_clip_path.parent.mkdir(parents=True, exist_ok=True)
     num_frames = max(int(duration * fps), fps)
 
-    filter_graph = _get_dynamic_ken_burns_filter(scene_index, num_frames, fps, resolution)
+    filter_graph = _get_dynamic_ken_burns_filter(scene_index, num_frames, fps, resolution, look=look)
 
     cmd = [
         "ffmpeg",
@@ -150,6 +169,7 @@ def assemble_video(
     burn_subtitles: bool = True,
     aspect_ratio: str = "16:9",
     temp_dir: Optional[Path] = None,
+    look: Optional[str] = None,
 ) -> Path:
     """
     Ensambla el video final aplicando:
@@ -208,7 +228,7 @@ def assemble_video(
             scene.duration or 6.0,
             r_dur,
         )
-        render_scene_clip(img_path, r_dur, clip_path, idx, fps, resolution, threads=2)
+        render_scene_clip(img_path, r_dur, clip_path, idx, fps, resolution, threads=2, look=look)
         return idx, clip_path
 
     with ThreadPoolExecutor(max_workers=clip_workers) as executor:

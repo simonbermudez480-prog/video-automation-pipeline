@@ -103,20 +103,38 @@ def _generate_with_fal(prompt: str, output_path: Path, aspect_ratio: str = "16:9
         return False
 
 
+MAX_CROP_RATIO = 1.25  # por encima, recortar perdería demasiado: se usa fondo desenfocado
+
+
+def _fit_with_blurred_background(im, target_w: int, target_h: int):
+    """Coloca la imagen completa (ajustada al ancho o alto) sobre una versión desenfocada y oscurecida de sí misma."""
+    from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+    background = ImageOps.fit(im, (target_w, target_h), method=Image.Resampling.LANCZOS)
+    background = background.filter(ImageFilter.GaussianBlur(radius=40))
+    background = ImageEnhance.Brightness(background).enhance(0.55)
+    foreground = ImageOps.contain(im, (target_w, target_h), method=Image.Resampling.LANCZOS)
+    background.paste(foreground, ((target_w - foreground.width) // 2, (target_h - foreground.height) // 2))
+    return background
+
+
 def _normalize_image_to_resolution(image_path: Path, aspect_ratio: str = "16:9") -> bool:
     """
     Garantiza que la imagen esté exactamente en resolución requerida:
-    1920x1080 (16:9) o 1080x1920 (9:16 vertical),
-    evitando bordes negros o distorsiones de aspecto en FFmpeg.
+    1920x1080 (16:9) o 1080x1920 (9:16 vertical), sin bordes negros ni distorsión.
+    Si el formato de origen difiere mucho (ej. foto horizontal de archivo en video vertical),
+    la coloca completa sobre un fondo desenfocado en vez de recortar el centro.
     Aplica mejoras visuales sutiles (contraste, nitidez) si está habilitado.
     """
     try:
         from PIL import Image, ImageOps, ImageEnhance
         target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
         with Image.open(image_path) as im:
-            if im.mode in ("RGBA", "P"):
-                im = im.convert("RGB")
-            fitted = ImageOps.fit(im, (target_w, target_h), method=Image.Resampling.LANCZOS)
+            im = im.convert("RGB")
+            src_ratio, dst_ratio = im.width / im.height, target_w / target_h
+            if max(src_ratio, dst_ratio) / min(src_ratio, dst_ratio) > MAX_CROP_RATIO:
+                fitted = _fit_with_blurred_background(im, target_w, target_h)
+            else:
+                fitted = ImageOps.fit(im, (target_w, target_h), method=Image.Resampling.LANCZOS)
 
             # Optimización estética para estilo documental cinematográfico
             if getattr(settings, "ENABLE_IMAGE_ENHANCEMENT", True):
@@ -553,7 +571,7 @@ def _build_source_plan(
     scene_seed = (topic_seed + scene.scene_id * 31) if topic_seed is not None else None
 
     era = getattr(visual_contract, "era_setting", "") or ""
-    year = re.search(r"\b(1[0-9]{3})\b", era)
+    year = re.search(r"\b(1[0-9]{3})s?\b", era)
     decade = f"{int(year.group(1)) // 10 * 10}s" if year else None
     topic_terms = (getattr(visual_contract, "archive_search_terms", None) or "").strip()
 

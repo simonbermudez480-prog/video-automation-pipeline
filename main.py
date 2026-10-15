@@ -38,7 +38,7 @@ from src.voice_synthesizer import synthesize_voice
 from src.audio_processor import process_audio_and_align
 from src.image_generator import generate_images_for_scenes
 from src.quality_gate import MANIFEST_NAME, run_quality_gate
-from src.video_assembler import assemble_video
+from src.video_assembler import assemble_video, choose_look
 from src.youtube_uploader import upload_video_to_youtube
 from src.social_copywriter import generate_social_copy, SocialBundle
 from src.multiplatform_publisher import publish_video_multiplatform
@@ -272,6 +272,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             burn_subtitles=not args.no_subtitles,
             aspect_ratio=aspect_ratio,
             temp_dir=job_temp_dir,
+            look=choose_look(getattr(script_data, "visual_contract", None)),
         )
         # Sincronizar copia con video_final.mp4 para conveniencia
         try:

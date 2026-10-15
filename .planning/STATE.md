@@ -2,11 +2,12 @@
 
 ## Status
 - **Current Phase:** Phase 15 (Pre-Publish Quality Gate) — Complete (sin commit). Phase 16 (Free Hybrid Visual Pipeline) — siguiente.
-- **Active Task:** Fase 15 commiteada en la rama `fase-15-quality-gate` (commit 49186e5, sin merge a main). Spike 16.1 y tarea 16.2 terminados (16.2 sin commit). Siguiente: 16.3 (encuadre vertical con fondo desenfocado) y 16.4 (gradación uniforme).
+- **Active Task:** Fase 15 commiteada en la rama `fase-15-quality-gate` (commit 49186e5, sin merge a main). Tareas 16.1–16.2 commiteadas (4485e98); 16.3 y 16.4 terminadas sin commit. Siguiente: 16.6 (video de prueba completo, cuando haya cuota de visión) y 16.5/16.5b.
 - **Fase 15 — resultado clave:** con el control activo, las fuentes gratuitas actuales (Pexels/Wikimedia con búsqueda simple) solo consiguen 4/13 imágenes válidas para el Emú (1932): casi todo el stock es moderno. El bloqueo funciona; lo que falta es mejor búsqueda de archivo (Fase 16). Nuevo módulo `src/quality_gate.py`; publicar ahora pide confirmación humana por defecto (`--no-approval` para automatizar) y deja `quality_report.json` en la carpeta del job y la hoja de contacto en `output/review/`.
 - **Riesgo:** la cuota gratuita de visión por modelo es pequeña (2 modelos se agotaron en 4 llamadas el 2026-10-15). Si se agota, las escenas quedan `unaudited` y la publicación se bloquea.
 - **Next Actions:**
-  1. Phase 16: tareas 16.3 y 16.4. Repetir la prueba del Emú con cuota de visión disponible para confirmar las aprobaciones.
+  1. Phase 16: 16.6, producir el video del Emú completo sin publicar (con cuota de visión disponible) y revisar la hoja de contacto y los frames.
+  2. 16.5b: créditos de licencias en la descripción.
   2. Usuario: crear cuenta gratuita de Cloudflare y token de Workers AI (solo si se quiere IA para huecos, tarea 16.5).
 - **Backup previo a cambios (2026-10-15):** `backups/repo_history_20261015_pre_phase15.bundle` (historial git completo) y `backups/backup_pre_phase15_20261015.zip` (árbol de trabajo con cambios sin commitear, `.env`, assets; sin `venv`, `output/`, `assets/temp`, `assets/jobs`).
 
