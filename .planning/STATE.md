@@ -18,6 +18,12 @@
 - Lección: verificar la hoja de contacto completa de todas las escenas, no frames sueltos.
 
 ## Completed (history)
+  - Publicación de "La explosión de Chernóbil (1986)" (2026-10-15), primer video con las fases 15–17: `output/la_explosion_de_chernobil_1986_9x16_v2.mp4` (126,04 s; control superado con 11/13 imágenes + 2 fusiones). Publicado vía Buffer:
+    - YouTube: https://www.youtube.com/watch?v=EuJT_8RnMcg (Post ID `6ad08ae75ca32ad3c7eca0e7`)
+    - Instagram Reels: https://www.instagram.com/reel/DeggFAWiqQJ/ (Post ID `6ad08aeb6295ecc932f5390c`)
+    - TikTok: https://tiktok.com/@historiaycultura2411/video/7696804573444459783 (Post ID `6ad08af6de79014f82c64029`)
+    - **Publicado sin créditos de licencia por decisión del usuario**, aunque usa fotos de la IAEA con CC BY-SA 2.0 que exigen atribución (16.5b pendiente).
+    - Primer intento fallido: disco lleno (0,8 GB libres) → falló el CDN de GitHub y quedó un `_web.mp4` truncado. Corregido en `buffer_publisher.py`: solo se reutiliza el video optimizado si FFmpeg puede leerlo y se borran restos de intentos fallidos (sin commit).
   - Producción y Publicación de "La Guerra del Emú en Australia (1932)": Video master de 43.18 MB (`la_guerra_del_emu_en_australia_1932_9x16_20261014_085816.mp4`, 126.67s @ 1080x1920), optimizado a 10.77 MB web (`_web.mp4`), alojado en CDN de GitHub y publicado exitosamente en las 3 plataformas vía Buffer GraphQL API:
     - YouTube Shorts: `https://www.youtube.com/shorts/ESQAYfPmYHg` (Post ID: `6acf800a145f884d2ce0c9d1`)
     - Instagram Reels: `https://www.instagram.com/reel/DeedxRyEf2P/` (Post ID: `6acf800dd3e18071d3973615`)

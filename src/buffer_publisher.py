@@ -33,8 +33,9 @@ def _get_upload_ready_video(video_path: Path) -> Path:
         return video_path
 
     opt_path = video_path.parent / f"{video_path.stem}_web.mp4"
-    if opt_path.exists() and opt_path.stat().st_size > 1000:
+    if opt_path.exists() and _is_readable_video(opt_path):
         return opt_path
+    opt_path.unlink(missing_ok=True)  # restos de un intento fallido (p. ej. disco lleno)
 
     logger.info("Optimizando peso del video ({:.2f} MB) para transferencia fluida hacia Buffer...", size_mb)
     cmd = [
@@ -46,14 +47,25 @@ def _get_upload_ready_video(video_path: Path) -> Path:
     ]
     try:
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if res.returncode == 0 and opt_path.exists():
+        if res.returncode == 0 and _is_readable_video(opt_path):
             new_mb = opt_path.stat().st_size / (1024 * 1024)
             logger.success("Video optimizado para entrega web: {:.2f} MB ({:.1f}% menor)", new_mb, (1 - new_mb / size_mb) * 100)
             return opt_path
+        logger.warning("No se pudo comprimir video para subida: {}", res.stderr.decode(errors="ignore")[-300:])
     except Exception as e:
         logger.warning("No se pudo comprimir video para subida: {}", e)
+    opt_path.unlink(missing_ok=True)
 
     return video_path
+
+
+def _is_readable_video(path: Path) -> bool:
+    """True si FFmpeg puede leer la duración del archivo (descarta MP4 truncados)."""
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    return probe.returncode == 0 and bool(probe.stdout.strip())
 
 
 def _upload_to_github_cdn(target_path: Path) -> Optional[str]:
