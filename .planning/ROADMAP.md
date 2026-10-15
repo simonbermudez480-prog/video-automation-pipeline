@@ -97,3 +97,12 @@
   - [ ] 16.5 IA gratuita para huecos vía Cloudflare Workers AI, con la misma gradación (FR-13.4, FR-13.5). Bloqueada hasta que el usuario cree la cuenta y el token.
   - [ ] 16.5b Créditos de licencias en la descripción de la publicación (FR-13.8).
   - [ ] 16.6 Verificar: producir video de prueba sin publicar, revisar hoja de contacto completa y comparar contra la del Emú.
+
+- [ ] **Phase 17: Revisión visual siempre disponible y publicación diferida** (Requisitos: FR-14)
+  - [x] 17.1 Descubrimiento automático de modelos de visión gratuitos (FR-14.1).
+  - [x] 17.2 Errores diferenciados: cuota diaria, límite por minuto, saturación, petición no soportada (FR-14.2).
+  - [x] 17.3 Soporte de modelos sin modo JSON (FR-14.3).
+  - [x] 17.4 Verificado (2026-10-15): 16 modelos descubiertos (antes 3). Con los 3 originales marcados como agotados: `gemini-3.8-flash` → saturado, reintento, cuota diaria → descartado; `gemini-3.7-flash` → saturado, reintento → auditoría resuelta.
+    - **Hallazgo:** el revisor rechaza fotos reales de archivo correctas (0/13 con `gemini-2.5-flash`, 2/13 con `gemini-3.7-flash`). Motivos: (a) regla "ningún humano en planos macro/ambiente", pensada para IA, aplicada a fotos de época con personas; (b) compara contra la composición exacta del `visual_prompt` (pensado para IA) en vez de contra la narración y el hecho. Además, distintos modelos son más o menos estrictos. Pendiente de decisión: criterios específicos para fotos de archivo.
+  - [ ] 17.5 Cola de publicación diferida en `output/queue/` y `--process-queue` (FR-14.4, FR-14.5).
+  - [ ] 17.6 Verificar la cola con publicación simulada y documentar la tarea programada de Windows.

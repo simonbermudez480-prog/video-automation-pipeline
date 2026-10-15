@@ -7,6 +7,8 @@ Provee:
 4. Veredicto de bloqueo de publicación (gate).
 """
 import json
+import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -27,6 +29,11 @@ QA_ISSUES = ("UNWANTED_HUMAN", "WATERMARK_OR_TEXT", "ABSURD_DISSONANCE", "ANACHR
 _VISION_LOCK = threading.Lock()
 _LAST_VISION_CALL = 0.0
 _EXHAUSTED_VISION_MODELS: set[str] = set()
+_NO_JSON_MODE_MODELS: set[str] = set()
+_DISCOVERED_VISION_MODELS: Optional[list[str]] = None
+_VISION_MODEL_PATTERN = re.compile(r"^(gemini-[\w.-]*flash[\w.-]*|gemma-[\w.-]+)$")
+_VISION_MODEL_EXCLUDE = re.compile(r"image|tts|audio|live|transcribe|banana")
+TRANSIENT_RETRY_WAIT = 5
 
 
 # ---------------------------------------------------------------------------
@@ -115,34 +122,115 @@ def _build_batch_prompt(items: list[dict], era: str) -> str:
     return "\n".join(lines)
 
 
+def _model_rank(name: str) -> tuple:
+    """Orden de preferencia: flash antes que flash-lite y gemma; versión más reciente primero."""
+    family = 2 if name.startswith("gemma") else (1 if "lite" in name else 0)
+    version = re.search(r"(\d+(?:\.\d+)?)", name)
+    return (family, -float(version.group(1)) if version else 0.0, name)
+
+
+def get_vision_models(client) -> list[str]:
+    """
+    Modelos de visión a probar, en orden. Con GEMINI_VISION_MODELS en .env se usa esa lista tal cual;
+    si no, los preferidos de la configuración y después todos los modelos gratuitos multimodales
+    que la API ofrezca (cada uno tiene su propia cuota diaria).
+    """
+    global _DISCOVERED_VISION_MODELS
+    if os.getenv("GEMINI_VISION_MODELS"):
+        return settings.get_gemini_vision_candidates()
+    if _DISCOVERED_VISION_MODELS is None:
+        found: list[str] = []
+        try:
+            for m in client.models.list():
+                name = m.name.removeprefix("models/")
+                if ("generateContent" in (m.supported_actions or [])
+                        and _VISION_MODEL_PATTERN.match(name) and not _VISION_MODEL_EXCLUDE.search(name)):
+                    found.append(name)
+        except Exception as e:
+            logger.warning("No se pudo listar modelos de visión: {}", e)
+        preferred = settings.get_gemini_vision_candidates()
+        _DISCOVERED_VISION_MODELS = preferred + sorted((n for n in found if n not in preferred), key=_model_rank)
+        logger.info("Modelos de visión disponibles ({}): {}", len(_DISCOVERED_VISION_MODELS), ", ".join(_DISCOVERED_VISION_MODELS))
+    return _DISCOVERED_VISION_MODELS
+
+
+def _classify_vision_error(msg: str) -> str:
+    """'daily' (cuota del día agotada), 'bad_request' (petición no aceptada) o 'transient' (por minuto / saturado)."""
+    if "PerDay" in msg or "per_day" in msg.lower() or "limit: 0" in msg:
+        return "daily"
+    if "400" in msg or "INVALID_ARGUMENT" in msg or "404" in msg or "NOT_FOUND" in msg:
+        return "bad_request"
+    return "transient"
+
+
+def _parse_json_text(text: str) -> Optional[dict]:
+    """Extrae el objeto JSON de una respuesta, aunque venga envuelta en texto o bloques de código."""
+    text = (text or "").strip()
+    try:
+        return json.loads(text)
+    except ValueError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            try:
+                return json.loads(text[start:end + 1])
+            except ValueError:
+                pass
+    return None
+
+
 def _call_vision(contents: list) -> Optional[dict]:
-    """Llama a la cascada de modelos de visión. Retorna None si todos están agotados o caídos."""
+    """
+    Recorre los modelos de visión hasta obtener una respuesta JSON. Retorna None si ninguno responde.
+    Cuota diaria agotada o petición no aceptada: el modelo se descarta para la sesión.
+    Límite por minuto o saturación: un reintento tras TRANSIENT_RETRY_WAIT segundos y luego el siguiente modelo.
+    Modelos sin modo JSON (p. ej. Gemma): se repite sin response_mime_type y se extrae el JSON del texto.
+    """
     global _LAST_VISION_CALL
     from google import genai
 
-    client = genai.Client(api_key=settings.GEMINI_API_KEY, http_options={"timeout": 60000})
+    client = genai.Client(api_key=settings.GEMINI_API_KEY, http_options={"timeout": 90000})
     with _VISION_LOCK:
-        for model in settings.get_gemini_vision_candidates():
+        for model in get_vision_models(client):
             if model in _EXHAUSTED_VISION_MODELS:
                 continue
-            elapsed = time.time() - _LAST_VISION_CALL
-            if elapsed < 1.2:
-                time.sleep(1.2 - elapsed)
-            _LAST_VISION_CALL = time.time()
-            try:
-                resp = client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config={"response_mime_type": "application/json"},
-                )
-                return json.loads(resp.text or "{}")
-            except Exception as e:
-                msg = str(e)
-                if "RESOURCE_EXHAUSTED" in msg or "per_day" in msg or "PerDay" in msg or "quota" in msg.lower():
-                    logger.warning("Modelo de visión '{}' agotó su cuota. Marcado como no disponible.", model)
-                    _EXHAUSTED_VISION_MODELS.add(model)
-                else:
-                    logger.warning("Fallo de auditoría por lote con '{}': {}. Probando siguiente...", model, msg[:200])
+            use_json = model not in _NO_JSON_MODE_MODELS
+            transient_retried = False
+            while True:
+                elapsed = time.time() - _LAST_VISION_CALL
+                if elapsed < 1.2:
+                    time.sleep(1.2 - elapsed)
+                _LAST_VISION_CALL = time.time()
+                try:
+                    config = {"response_mime_type": "application/json"} if use_json else None
+                    resp = client.models.generate_content(model=model, contents=contents, config=config)
+                    data = _parse_json_text(resp.text)
+                    if data is not None:
+                        logger.info("Auditoría visual resuelta con '{}'.", model)
+                        return data
+                    logger.warning("Respuesta de '{}' sin JSON válido. Probando siguiente...", model)
+                    break
+                except Exception as e:
+                    msg = str(e)
+                    kind = _classify_vision_error(msg)
+                    if kind == "daily":
+                        logger.warning("Modelo de visión '{}' agotó su cuota diaria. Descartado para esta sesión.", model)
+                        _EXHAUSTED_VISION_MODELS.add(model)
+                        break
+                    if kind == "bad_request" and use_json:
+                        use_json = False
+                        _NO_JSON_MODE_MODELS.add(model)
+                        continue
+                    if kind == "bad_request":
+                        logger.warning("Modelo '{}' no acepta la auditoría ({}). Descartado para esta sesión.", model, msg[:120])
+                        _EXHAUSTED_VISION_MODELS.add(model)
+                        break
+                    if not transient_retried:
+                        transient_retried = True
+                        logger.info("Modelo '{}' saturado o con límite por minuto; reintento en {}s...", model, TRANSIENT_RETRY_WAIT)
+                        time.sleep(TRANSIENT_RETRY_WAIT)
+                        continue
+                    logger.warning("Modelo '{}' sigue no disponible ({}). Probando siguiente...", model, msg[:120])
+                    break
     return None
 
 
