@@ -154,7 +154,7 @@ def render_scene_clip(
     Usa preset ultrafast y CRF 16 para máxima velocidad con calidad visual impecable para el ensamble.
     """
     output_clip_path.parent.mkdir(parents=True, exist_ok=True)
-    num_frames = max(int(duration * fps), fps)
+    num_frames = max(round(duration * fps), fps)
 
     filter_graph = _get_dynamic_ken_burns_filter(scene_index, num_frames, fps, resolution, look=look)
 
@@ -231,7 +231,9 @@ def assemble_video(
     clip_render_tasks = []
     for idx, (scene, img_path) in enumerate(zip(scenes, image_paths), start=1):
         base_duration = scene.duration or 6.0
-        render_duration = base_duration + (TRANSITION_DURATION if idx < total_scenes else 0.0)
+        # Cada fundido empieza TRANSITION_DURATION antes del cambio de escena, así que cada clip (también el último)
+        # se adelanta ese tiempo y necesita durar lo mismo de más para terminar junto con la narración.
+        render_duration = base_duration + TRANSITION_DURATION
         clip_path = working_temp_dir / f"clip_{idx:03d}.mp4"
         clip_render_tasks.append((idx, scene, img_path, render_duration, clip_path))
 
@@ -322,12 +324,12 @@ def assemble_video(
         logger.info("Añadiendo filtro de subtítulos de alto contraste ({}, PlayResY={}, MarginV={}): {}", aspect_ratio, sub_play_res_y, sub_margin_v, sub_filter[:75])
 
 
-    filter_complex_str = "; ".join(filter_complex_steps)
-    if filter_complex_str:
-        cmd.extend(["-filter_complex", filter_complex_str])
-        cmd.extend(["-map", f"[{final_video_label}]"])
-    else:
-        cmd.extend(["-map", "0:v"])
+    # Red de seguridad: congelar el último frame para que el video nunca sea más corto que la narración;
+    # -shortest recorta después al largo exacto del audio.
+    pad_input = final_video_label if filter_complex_steps else "0:v"
+    filter_complex_steps.append(f"[{pad_input}]tpad=stop_mode=clone:stop_duration=2[vfinal]")
+    cmd.extend(["-filter_complex", "; ".join(filter_complex_steps)])
+    cmd.extend(["-map", "[vfinal]"])
 
     # Mapear el audio de narración
     cmd.extend(["-map", f"{audio_input_idx}:a"])
