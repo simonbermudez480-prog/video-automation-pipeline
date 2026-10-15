@@ -107,5 +107,9 @@
   - [x] 17.4b Criterios del revisor por fuente (FR-14.3b). Verificado con el Emú en carpeta nueva: 9/13 aprobadas (antes 0–2/13); las 4 fotos reales de 1932 aprobadas; rechazadas correctamente la camioneta moderna, un parque urbano, vidrio roto contemporáneo y una imagen de Pollinations con marca de agua. Captura: `screenshots/fase17_emu_contact.png`.
     - Dudoso: aprobó un dingo en jaula para la escena de la valla (criterio de stock algo permisivo).
     - El video sigue bloqueado: 4 escenas agotan sus candidatos tras 4 rondas. Hace falta una fuente extra para huecos (16.5, Cloudflare) o más profundidad de búsqueda en archivo.
+  - [x] 17.4c Búsqueda de archivo ampliada (sin cuentas nuevas): campo `Scene.archive_queries` generado por el guion; consultas lugar + década desde `era_setting`; nueva fuente Openverse (Flickr Commons/bibliotecas, solo licencias comerciales y modificables); límites de candidatos mayores y 8 rondas.
+    - Resultado (2026-10-15): **no mejora la tasa de aprobación**. Guion original: 9/13 (igual que antes, distinto conjunto). Guion nuevo de 5 escenas con `archive_queries`: 3/5 (las 3 son fotos reales de 1932). Openverse no aportó ninguna imagen final. Tiempo de la etapa de imágenes: 6–11 min.
+    - Inconsistencia del revisor: aprobó vidrio roto contemporáneo (escena 2) que antes rechazó, y siluetas de soldados modernos (escena 11).
+    - Conclusión: las escenas que fallan describen acciones sin registro fotográfico (camión persiguiendo emúes, atardecer con emúes); más búsqueda no las resuelve. Opciones: fusionar la escena sin imagen con la anterior, usar un recorte de una foto aprobada, o IA para huecos (16.5, requiere cuenta). Captura: `screenshots/fase17_emu_contact_archivo_ampliado.png`.
   - [ ] 17.5 Cola de publicación diferida en `output/queue/` y `--process-queue` (FR-14.4, FR-14.5).
   - [ ] 17.6 Verificar la cola con publicación simulada y documentar la tarea programada de Windows.

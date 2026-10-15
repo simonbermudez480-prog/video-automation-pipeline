@@ -95,7 +95,7 @@ def find_duplicates(image_paths: dict[int, Path]) -> dict[int, int]:
 # ---------------------------------------------------------------------------
 
 SOURCE_KINDS = {
-    "wikimedia_topic": "archive", "wikimedia_scene": "archive", "nasa": "archive",
+    "wikimedia_topic": "archive", "wikimedia_scene": "archive", "openverse": "archive", "nasa": "archive",
     "pexels": "stock",
     "fal": "ai", "imagen": "ai", "pollinations": "ai",
 }

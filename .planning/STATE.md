@@ -2,11 +2,11 @@
 
 ## Status
 - **Current Phase:** Phase 15 (Pre-Publish Quality Gate) — Complete (sin commit). Phase 16 (Free Hybrid Visual Pipeline) — siguiente.
-- **Active Task:** Fase 17 (revisión visual siempre disponible + cola de publicación diferida) registrada; capa 1 commiteada (6f8290b); criterios del revisor por fuente terminados y verificados (17.4b, sin commit): Emú 9/13 aprobadas. Bloqueo restante: 4 escenas sin candidato válido. Fase 16 commiteada hasta 16.4 (931d0ce) en la rama `fase-15-quality-gate`.
+- **Active Task:** Fase 17 (revisión visual siempre disponible + cola de publicación diferida) registrada; capa 1 commiteada (6f8290b); criterios del revisor por fuente terminados y verificados (17.4b, sin commit): Emú 9/13 aprobadas. Bloqueo restante: 4 escenas sin candidato válido; la búsqueda ampliada (17.4c, sin commit) no lo resolvió (ver ROADMAP). Fase 16 commiteada hasta 16.4 (931d0ce) en la rama `fase-15-quality-gate`.
 - **Fase 15 — resultado clave:** con el control activo, las fuentes gratuitas actuales (Pexels/Wikimedia con búsqueda simple) solo consiguen 4/13 imágenes válidas para el Emú (1932): casi todo el stock es moderno. El bloqueo funciona; lo que falta es mejor búsqueda de archivo (Fase 16). Nuevo módulo `src/quality_gate.py`; publicar ahora pide confirmación humana por defecto (`--no-approval` para automatizar) y deja `quality_report.json` en la carpeta del job y la hoja de contacto en `output/review/`.
 - **Riesgo:** la cuota gratuita de visión por modelo es pequeña (2 modelos se agotaron en 4 llamadas el 2026-10-15). Si se agota, las escenas quedan `unaudited` y la publicación se bloquea.
 - **Next Actions:**
-  0. Rellenar huecos (16.5 Cloudflare o más búsqueda en archivo) y Fase 17 capa 2 (17.5–17.6).
+  0. Decidir cómo rellenar escenas sin imagen (fusionar con la anterior, recorte de foto aprobada o IA con cuenta) y luego Fase 17 capa 2 (17.5–17.6).
   1. Phase 16: 16.6, producir el video del Emú completo sin publicar (con cuota de visión disponible) y revisar la hoja de contacto y los frames.
   2. 16.5b: créditos de licencias en la descripción.
   2. Usuario: crear cuenta gratuita de Cloudflare y token de Workers AI (solo si se quiere IA para huecos, tarea 16.5).

@@ -63,6 +63,10 @@ class Scene(BaseModel):
         default=None,
         description="Términos de búsqueda visual en inglés (3 a 6 palabras) para archivo documental o histórico si corresponde"
     )
+    archive_queries: Optional[List[str]] = Field(
+        default=None,
+        description="2 a 3 consultas en inglés para buscar FOTOGRAFÍAS REALES de archivo de esta escena (personas, lugares, objetos o hechos concretos que existieron), de más específica a más general"
+    )
     start_time: Optional[float] = Field(default=None, description="Segundo de inicio en la línea de tiempo")
     end_time: Optional[float] = Field(default=None, description="Segundo de finalización en la línea de tiempo")
     duration: Optional[float] = Field(default=None, description="Duración exacta en segundos")
@@ -126,6 +130,7 @@ DIRECTRICES DE COHERENCIA VISUAL (VISUAL CONTRACT & ANTI-FACE-MORPHING):
    - Formato {aspect_ratio}: {'vertical 9:16 framing, mobile safe zone' if is_vertical else 'cinematic 16:9 widescreen'}.
    - Termina siempre especificando: 'cinematic film still, photorealistic, 8k, no text, no watermark, no captions'.
 10. Para cada escena, incluye 'search_keywords' con 2 a 4 términos esenciales y directos en inglés que representen el objeto, vehículo, lugar o sujeto físico tangible (ej: 'vintage coach bus', 'hotel ballroom', 'signing contract pen', 'vintage race car'), evitando frases largas para que las APIs de archivo fotográfico encuentren coincidencias exactas.
+10b. Para cada escena, incluye 'archive_queries': 2 a 3 consultas en inglés pensadas para encontrar fotografías REALES en Wikimedia Commons o bibliotecas públicas, nombrando cosas que existieron (ej: 'Sir George Pearce', 'Australian Parliament House 1930s', 'Western Australia wheat farm 1930s'), de más específica a más general. No describas el encuadre ni la luz.
 11. Metadatos optimizados para YouTube: Título con alto gancho emocional (añade '#Shorts' si es 9:16), descripción completa y tags relevantes.
 """
 

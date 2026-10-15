@@ -15,6 +15,7 @@ import hashlib
 import os
 import re
 import shutil
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
@@ -321,22 +322,39 @@ def _wikimedia_search(query: str, target_width: int) -> tuple[dict, ...]:
     return tuple(results)
 
 
-def _scene_archive_queries(prompt: str, keywords: Optional[str], decade: Optional[str]) -> list[str]:
-    """Consultas por escena: palabras clave con la década de la época, luego sin ella y simplificadas."""
+def _scene_archive_queries(
+    prompt: str,
+    keywords: Optional[str],
+    decade: Optional[str],
+    archive_queries: Optional[list[str]] = None,
+    places: Optional[list[str]] = None,
+) -> list[str]:
+    """
+    Consultas por escena, de más específica a más general: las consultas de archivo del guion,
+    las palabras clave con la década, sin ella, simplificadas, y por último lugar + década de la época.
+    """
     query = (keywords or _extract_keywords_from_prompt(prompt)).strip()
     q_clean = query.lower()
     for es_term, en_term in _ARCHIVE_TRANSLATIONS.items():
         if es_term in q_clean:
             query = q_clean.replace(es_term, en_term)
             break
-    queries = []
+    queries = [q.strip() for q in (archive_queries or []) if q and q.strip()]
     if decade and decade not in query and not re.search(r"\b1[0-9]{3}s?\b", query):
         queries.append(f"{query} {decade}")
     queries.append(query)
     words = query.split()
     if len(words) > 3:
         queries.append(" ".join(words[:3]))
-    return queries
+    for place in places or []:
+        queries.append(f"{place} {decade}" if decade else place)
+    return list(dict.fromkeys(queries))
+
+
+def _era_places(era: str) -> list[str]:
+    """Lugares mencionados en era_setting (partes sin años), ej. 'Western Australian Outback'."""
+    parts = [p.strip() for p in era.split(",")]
+    return [p for p in parts if p and not re.search(r"\d", p)][:2]
 
 
 def _download_candidate(meta: dict, output_path: Path, aspect_ratio: str, headers: Optional[dict] = None) -> Optional[dict]:
@@ -351,21 +369,22 @@ def _download_candidate(meta: dict, output_path: Path, aspect_ratio: str, header
     return None
 
 
-def _fetch_from_wikimedia_commons(
+def _fetch_from_archive(
+    search: Callable[[str], tuple[dict, ...]],
+    label: str,
     queries: list[tuple[str, int]],
     output_path: Path,
     aspect_ratio: str = "16:9",
     index: int = 0,
 ) -> Optional[dict]:
     """
-    Descarga el candidato número `index` de Wikimedia Commons combinando varias consultas.
+    Descarga el candidato número `index` de un archivo combinando varias consultas.
     queries: [(consulta, rotación)]; la rotación reparte entre escenas los resultados de una consulta genérica
     para que no todas empiecen por la misma foto. Retorna los metadatos (autor, licencia) o None.
     """
-    target_width = 1080 if aspect_ratio == "9:16" else 1920
     candidates: list[dict] = []
     for q, rotate in queries:
-        found = list(_wikimedia_search(q, target_width))
+        found = list(search(q))
         if rotate and found:
             k = rotate % len(found)
             found = found[k:] + found[:k]
@@ -376,8 +395,63 @@ def _fetch_from_wikimedia_commons(
     if index >= len(candidates):
         return None
     meta = candidates[index]
-    logger.info("Descargando de Wikimedia Commons: {} ({})", meta["title"], meta["license"])
+    logger.info("Descargando de {}: {} ({})", label, meta["title"], meta["license"])
     return _download_candidate(meta, output_path, aspect_ratio, headers=_WIKIMEDIA_HEADERS)
+
+
+def _fetch_from_wikimedia_commons(queries: list[tuple[str, int]], output_path: Path, aspect_ratio: str = "16:9", index: int = 0) -> Optional[dict]:
+    target_width = 1080 if aspect_ratio == "9:16" else 1920
+    return _fetch_from_archive(lambda q: _wikimedia_search(q, target_width), "Wikimedia Commons", queries, output_path, aspect_ratio, index)
+
+
+_OPENVERSE_PUBLIC_DOMAIN = {"cc0", "pdm"}
+
+
+@lru_cache(maxsize=256)
+def _openverse_search(query: str) -> tuple[dict, ...]:
+    """
+    Busca en Openverse (Flickr Commons, bibliotecas y museos; sin cuenta) solo licencias que permiten
+    uso comercial y modificación. Límite anónimo ~20 peticiones/min: ante 429 se espera y se reintenta una vez.
+    """
+    url = (
+        f"https://api.openverse.org/v1/images/?q={urllib.parse.quote(query)}"
+        f"&license_type=commercial,modification&page_size=10"
+    )
+    data = None
+    for attempt in range(2):
+        try:
+            resp = requests.get(url, headers=_WIKIMEDIA_HEADERS, timeout=20)
+            if resp.status_code == 429 and attempt == 0:
+                time.sleep(4)
+                continue
+            if resp.status_code == 200:
+                data = resp.json()
+            break
+        except Exception as e:
+            logger.warning("Fallo al consultar Openverse ('{}'): {}", query, e)
+            break
+    if not data:
+        return ()
+    results = []
+    for x in data.get("results", []):
+        if not x.get("url") or (x.get("filetype") or "jpg").lower() not in ("jpg", "jpeg", "png"):
+            continue
+        lic = (x.get("license") or "").lower()
+        license_name = "Dominio público" if lic in _OPENVERSE_PUBLIC_DOMAIN else f"CC {lic.upper()} {x.get('license_version') or ''}".strip()
+        results.append({
+            "url": x["url"],
+            "title": x.get("title") or "",
+            "page_url": x.get("foreign_landing_url") or "",
+            "author": x.get("creator") or "Autor desconocido",
+            "license": license_name,
+            "license_url": x.get("license_url") or "",
+            "attribution_required": lic not in _OPENVERSE_PUBLIC_DOMAIN,
+        })
+    return tuple(results)
+
+
+def _fetch_from_openverse(queries: list[tuple[str, int]], output_path: Path, aspect_ratio: str = "16:9", index: int = 0) -> Optional[dict]:
+    return _fetch_from_archive(_openverse_search, "Openverse", queries, output_path, aspect_ratio, index)
 
 
 @lru_cache(maxsize=256)
@@ -539,10 +613,10 @@ def _generate_procedural_fallback_image(scene_id: int, prompt: str, output_path:
 
 # Máximo de candidatos por fuente para cada escena
 _SOURCE_LIMITS = {
-    "wikimedia_topic": 3, "wikimedia_scene": 3, "pexels": 3, "nasa": 1,
+    "wikimedia_topic": 4, "wikimedia_scene": 5, "openverse": 4, "pexels": 3, "nasa": 1,
     "fal": 1, "imagen": 1, "pollinations": 2,
 }
-MAX_AUDIT_ROUNDS = 4
+MAX_AUDIT_ROUNDS = 8  # cada ronda prueba un candidato por escena pendiente y cuesta una llamada de visión
 
 FetchFn = Callable[[Path, int], Optional[dict]]
 
@@ -559,7 +633,7 @@ def _build_source_plan(
     topic_seed: Optional[int],
 ) -> list[tuple[str, FetchFn]]:
     """
-    Define el orden de fuentes para una escena: archivo real primero (Wikimedia por tema y por escena),
+    Define el orden de fuentes para una escena: archivo real primero (Wikimedia por tema, Wikimedia y Openverse por escena),
     luego stock (Pexels), NASA y por último IA. Cada fuente descarga su candidato número `index`
     sin auditarlo (la auditoría visual se hace después, por lote) y retorna sus metadatos de autor/licencia.
     """
@@ -583,9 +657,12 @@ def _build_source_plan(
         topic_queries = [(f"{topic_terms} {scene_words}".strip(), 0), (topic_terms, scene.scene_id - 1)]
         plan.append(("wikimedia_topic", lambda out, i: _fetch_from_wikimedia_commons(topic_queries, out, aspect_ratio, index=i)))
 
-    # 2. Wikimedia por escena, con la década de la época
-    scene_queries = [(q, 0) for q in _scene_archive_queries(prompt, keywords, decade)]
+    # 2. Wikimedia y Openverse por escena: consultas del guion, palabras clave con década y lugar + década
+    scene_queries = [
+        (q, 0) for q in _scene_archive_queries(prompt, keywords, decade, scene.archive_queries, _era_places(era))
+    ]
     plan.append(("wikimedia_scene", lambda out, i: _fetch_from_wikimedia_commons(scene_queries, out, aspect_ratio, index=i)))
+    plan.append(("openverse", lambda out, i: _fetch_from_openverse(scene_queries, out, aspect_ratio, index=i)))
 
     # 3. Pexels API (stock contemporáneo: útil para paisajes y objetos atemporales)
     plan.append(("pexels", lambda out, i: _fetch_from_pexels(prompt, keywords, out, aspect_ratio=aspect_ratio, index=i)))
