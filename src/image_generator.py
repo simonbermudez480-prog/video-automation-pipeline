@@ -215,6 +215,13 @@ def _build_cohesive_prompt(
     return sanitized
 
 
+def _pollinations_key() -> str:
+    """Clave de Pollinations: POLLINATIONS_API_KEY o, si no, IMAGE_API_KEY cuando no es el valor de ejemplo."""
+    return getattr(settings, "POLLINATIONS_API_KEY", "") or (
+        settings.IMAGE_API_KEY if settings.IMAGE_API_KEY and not settings.IMAGE_API_KEY.startswith("tu_clave") else ""
+    )
+
+
 def _generate_with_pollinations_flux(
     prompt: str,
     output_path: Path,
@@ -235,26 +242,27 @@ def _generate_with_pollinations_flux(
     target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
     seed_param = f"&seed={seed}" if seed is not None else ""
 
-    api_key = getattr(settings, "POLLINATIONS_API_KEY", "") or (
-        settings.IMAGE_API_KEY if settings.IMAGE_API_KEY and not settings.IMAGE_API_KEY.startswith("tu_clave") else ""
-    )
-
+    # Sin clave, Pollinations entrega un modelo básico con marca de agua que el control siempre rechaza
+    api_key = _pollinations_key()
+    if not api_key:
+        return False
     headers = dict(BROWSER_HEADERS)
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-        url = f"https://image.pollinations.ai/prompt/{encoded}?model=flux&width={target_w}&height={target_h}{seed_param}&nologo=true"
-    else:
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width={target_w}&height={target_h}{seed_param}&nologo=true"
+    headers["Authorization"] = f"Bearer {api_key}"
+    # API con clave (sk_): cobra del saldo de Pollen; FLUX schnell ~0,002 Pollen por imagen
+    url = f"https://gen.pollinations.ai/image/{encoded}?model=flux&width={target_w}&height={target_h}{seed_param}&nologo=true"
 
     try:
         logger.info("Intentando generación vía Pollinations ({}) [{}] (seed: {})...", aspect_ratio, f"{target_w}x{target_h}", seed or "auto")
-        resp = requests.get(url, headers=headers, timeout=22)
+        resp = requests.get(url, headers=headers, timeout=90)
         if resp.status_code == 200 and len(resp.content) > 10000:
             output_path.write_bytes(resp.content)
             _normalize_image_to_resolution(output_path, aspect_ratio)
             logger.success("Visual cinemático generado con Pollinations: {}", output_path.name)
             return True
-        logger.warning("Pollinations respondió HTTP {}", resp.status_code)
+        if resp.status_code == 402:
+            logger.warning("Pollinations: saldo de Pollen insuficiente (HTTP 402).")
+        else:
+            logger.warning("Pollinations respondió HTTP {}", resp.status_code)
         return False
     except Exception as e:
         logger.warning("Timeout o fallo en Pollinations: {}", e)
@@ -681,17 +689,8 @@ def _build_source_plan(
         plan.append(("imagen", lambda out, i: _ai_meta("Google Imagen", bool(
             _generate_with_google_imagen(cohesive_prompt, out, aspect_ratio=aspect_ratio) and _normalize_image_to_resolution(out, aspect_ratio)))))
 
-    # 7. Pollinations: sin clave, los temas bélicos se omiten (el modelo gratuito los degrada)
-    has_custom_key = bool(
-        getattr(settings, "POLLINATIONS_API_KEY", "")
-        or (settings.IMAGE_API_KEY and not settings.IMAGE_API_KEY.startswith("tu_clave"))
-    )
-    combat_terms = [
-        r"\bwar\b", r"\bbattle\b", r"\bsoldier\b", r"\barmy\b", r"\bhitler\b", r"\bnazi\b",
-        r"\binvasion\b", r"\bmilitary\b", r"\bcombat\b", r"\bbomb\b", r"\bstalingrad\b", r"\bnormandy\b"
-    ]
-    p_check = (cohesive_prompt + " " + keywords).lower()
-    if has_custom_key or not any(re.search(term, p_check) for term in combat_terms):
+    # 7. Pollinations (FLUX) solo con clave: sin ella las imágenes traen marca de agua y siempre se rechazan
+    if _pollinations_key():
         remedy_prompt = f"{cohesive_prompt}, uninhabited scene, absolutely no humans, no people, clean frame, no watermarks, no logos"
 
         def _pollinations(out: Path, i: int) -> Optional[dict]:
@@ -787,15 +786,25 @@ def generate_images_for_scenes(
             entries[idx] = {"prompt_sig": sig, "source": None, "audit": "pending", "reason": "", "issues": []}
             to_fetch.append(idx)
             continue
-        if entries[idx].get("audit") != "approved":
+        if entries[idx].get("audit") in ("rejected", "duplicate"):
+            to_fetch.append(idx)  # se continúa la cascada donde quedó (ver "cascade" más abajo)
+        elif entries[idx].get("audit") != "approved":
             to_audit.add(idx)
 
     paths = {idx: target_dir / f"scene_{idx:03d}.png" for idx in range(1, total + 1)}
     topic_seed = int(hashlib.sha1(topic.lower().strip().encode("utf-8")).hexdigest(), 16) % 500000 if topic else 12345
-    states = {
-        idx: {"idx": idx, "pos": 0, "tries": {}, "plan": _build_source_plan(scenes[idx - 1], provider, aspect_ratio, visual_contract, topic_seed)}
-        for idx in to_fetch
-    }
+    states = {}
+    for idx in to_fetch:
+        plan = _build_source_plan(scenes[idx - 1], provider, aspect_ratio, visual_contract, topic_seed)
+        state = {"idx": idx, "pos": 0, "tries": {}, "plan": plan}
+        saved = entries[idx].get("cascade")
+        if saved:
+            # Reanudar: misma fuente y mismos candidatos ya probados, para no repetir los rechazados
+            names = [name for name, _ in plan]
+            state["pos"] = names.index(saved["source"]) if saved.get("source") in names else 0
+            state["tries"] = dict(saved.get("tries", {}))
+            state["meta"] = entries[idx].get("credit")
+        states[idx] = state
 
     def _fetch_worker(idx: int) -> tuple[int, Optional[str]]:
         scene = scenes[idx - 1]
@@ -866,6 +875,12 @@ def generate_images_for_scenes(
         if not to_fetch:
             break
 
+    for i, state in states.items():
+        plan = state["plan"]
+        entries[i]["cascade"] = {
+            "source": plan[state["pos"]][0] if state["pos"] < len(plan) else None,
+            "tries": state["tries"],
+        }
     manifest = {"topic": topic, "aspect_ratio": aspect_ratio, "scenes": {str(i): e for i, e in entries.items()}}
     save_manifest(target_dir, manifest)
 

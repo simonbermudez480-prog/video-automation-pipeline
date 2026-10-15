@@ -6,7 +6,7 @@
 - **Fase 15 — resultado clave:** con el control activo, las fuentes gratuitas actuales (Pexels/Wikimedia con búsqueda simple) solo consiguen 4/13 imágenes válidas para el Emú (1932): casi todo el stock es moderno. El bloqueo funciona; lo que falta es mejor búsqueda de archivo (Fase 16). Nuevo módulo `src/quality_gate.py`; publicar ahora pide confirmación humana por defecto (`--no-approval` para automatizar) y deja `quality_report.json` en la carpeta del job y la hoja de contacto en `output/review/`.
 - **Riesgo:** la cuota gratuita de visión por modelo es pequeña (2 modelos se agotaron en 4 llamadas el 2026-10-15). Si se agota, las escenas quedan `unaudited` y la publicación se bloquea.
 - **Next Actions:**
-  0. Commit de la capa 2. Opcional: crear la tarea programada de Windows (README) y producir con `--no-approval` si se quiere publicación sin intervención.
+  0. Commit de Pollinations con clave + reanudación de cascada (sin commit). Créditos de licencias (16.5b) antes de publicar Chernóbil (fotos IAEA CC BY-SA). Opcional: crear la tarea programada de Windows (README) y producir con `--no-approval` si se quiere publicación sin intervención.
   1. Phase 16: 16.6, producir el video del Emú completo sin publicar (con cuota de visión disponible) y revisar la hoja de contacto y los frames.
   2. 16.5b: créditos de licencias en la descripción.
   2. Usuario: crear cuenta gratuita de Cloudflare y token de Workers AI (solo si se quiere IA para huecos, tarea 16.5).
