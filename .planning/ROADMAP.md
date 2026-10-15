@@ -84,9 +84,16 @@
   - [x] 15.6 Verificado (2026-10-15): (a) gate sin API sobre las imágenes publicadas del Emú → detecta degradados en escenas 1–2 y duplicado 10=6 (falso positivo de cielo liso corregido con comparación de color); (b) regeneración real del guion del Emú en carpeta temporal → 4 llamadas de visión en total (1 por ronda), 0 degradados, 0 duplicados, 4/13 aprobadas, publicación bloqueada correctamente. `--dry-run` no sirve para esto (sale antes de generar), por eso se usó una carpeta temporal.
 
 - [ ] **Phase 16: Free Hybrid Visual Pipeline** (Requisitos: FR-13) — *Fase B, enfoque híbrido gratuito elegido 2026-10-15 (costo USD 0)*
-  - [ ] 16.1 Spike gratuito: confirmar que la clave Gemini no tiene facturación activa; probar Pollinations con token gratuito, Cloudflare Workers AI (cuota free) y cuota free de imágenes Gemini. Elegir proveedor de huecos.
-  - [ ] 16.2 Mejorar búsqueda de archivo: Wikimedia + Library of Congress con filtro por época, varias candidatas por escena, auditoría por lote (FR-13.1).
+  - [x] 16.1 Spike gratuito (2026-10-15):
+    - Clave Gemini: **tier gratuito confirmado** (los errores de cuota citan `...-FreeTier`); no puede generar cargos.
+    - Imagen de Gemini (`gemini-2.5-flash-image`, `gemini-3.1-flash-image`, `-lite`, `-preview`): **descartada**, límite gratuito = 0.
+    - Pollinations: **descartada**, sin clave responde 402 incluso a 512px (cabeceras `X-PAYMENT`: pago por uso).
+    - Cloudflare Workers AI: **elegida para huecos**, 10.000 neuronas/día gratis; FLUX schnell ≈ 58 neuronas por imagen 576x1024 a 4 pasos (estimación) → ~170 imágenes/día. Pendiente: el usuario crea cuenta y token.
+    - Archivo: Wikimedia tiene fotos reales del hecho ("Deceased emu during Emu War.jpg", "Emus coming to drink Emu War.jpg") y de ametralladoras Lewis de época; el pipeline no las encontraba por buscar con palabras genéricas por escena y consultar Wikimedia al final. Library of Congress: útil pero lenta (timeouts). Openverse: agrega Flickr/Wikimedia con licencias CC (requiere atribución).
+  - [x] 16.2 Búsqueda de archivo (2026-10-15): nuevo campo `VisualContract.archive_search_terms` (nombre canónico en inglés del hecho); orden de fuentes: Wikimedia por tema → Wikimedia por escena (con década) → Pexels → NASA → IA; autor/licencia en el manifiesto (`credit`), descartando NC/ND y sin licencia. Prueba con el Emú: 7/13 escenas con fotos reales de 1932 de dominio público (antes 0), duplicados reemplazados aunque la visión esté caída. Library of Congress aplazada: lenta y sin licencia en los resultados de búsqueda.
+    - Pendiente detectado: el collage moderno "TheGreatEmuWarcolage.png" entra como candidato; la escena 11 trajo una foto de la Guerra Civil de EE. UU. La auditoría visual debería rechazarlos (no se pudo comprobar: cuota de visión agotada ese día).
   - [ ] 16.3 Encuadre vertical con fondo desenfocado para fotos horizontales (FR-13.3).
   - [ ] 16.4 Gradación uniforme por video derivada del `VisualContract` (FR-13.2).
-  - [ ] 16.5 IA gratuita solo para huecos con la misma gradación (FR-13.4, FR-13.5).
+  - [ ] 16.5 IA gratuita para huecos vía Cloudflare Workers AI, con la misma gradación (FR-13.4, FR-13.5). Bloqueada hasta que el usuario cree la cuenta y el token.
+  - [ ] 16.5b Créditos de licencias en la descripción de la publicación (FR-13.8).
   - [ ] 16.6 Verificar: producir video de prueba sin publicar, revisar hoja de contacto completa y comparar contra la del Emú.

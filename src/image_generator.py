@@ -243,15 +243,34 @@ def _generate_with_pollinations_flux(
 
 
 _WIKIMEDIA_HEADERS = {"User-Agent": "EducationalVideoBot/1.0 (educational; open-source documentary)"}
+_BLOCKED_LICENSE = re.compile(r"\b(NC|ND)\b|non-?commercial|no derivatives", re.IGNORECASE)
+_ARCHIVE_TRANSLATIONS = {
+    "agujeros negros": "black hole",
+    "agujero negro": "black hole",
+    "segunda guerra mundial": "world war ii",
+    "primera guerra mundial": "world war i",
+    "biblioteca de alejandria": "library of alexandria ancient",
+    "multiverso": "multiverse physics",
+    "inmortalidad cuantica": "quantum physics",
+}
+
+
+def _strip_html(value: str) -> str:
+    value = re.sub(r'<span style="display: ?none;?">.*?</span>', "", value or "")
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", value)).strip()
 
 
 @lru_cache(maxsize=256)
-def _wikimedia_search(query: str, target_width: int) -> tuple[str, ...]:
-    """Busca imágenes JPEG/PNG en Wikimedia Commons y retorna sus URLs (en caché por sesión)."""
+def _wikimedia_search(query: str, target_width: int) -> tuple[dict, ...]:
+    """
+    Busca imágenes JPEG/PNG en Wikimedia Commons con autor y licencia (en caché por sesión).
+    Descarta licencias no comerciales (NC), sin obras derivadas (ND) o sin licencia declarada.
+    """
     url = (
         f"https://commons.wikimedia.org/w/api.php?action=query&generator=search"
-        f"&gsrsearch={urllib.parse.quote(query)}&gsrnamespace=6&format=json"
-        f"&prop=imageinfo&iiprop=url|mime&iiurlwidth={target_width}"
+        f"&gsrsearch={urllib.parse.quote(query)}&gsrnamespace=6&gsrlimit=10&format=json"
+        f"&prop=imageinfo&iiprop=url|mime|extmetadata&iiurlwidth={target_width}"
+        f"&iiextmetadatafilter=LicenseShortName|Artist|LicenseUrl|AttributionRequired"
     )
     try:
         resp = requests.get(url, headers=_WIKIMEDIA_HEADERS, timeout=12)
@@ -261,67 +280,91 @@ def _wikimedia_search(query: str, target_width: int) -> tuple[str, ...]:
     except Exception as e:
         logger.warning("Fallo al consultar Wikimedia Commons ('{}'): {}", query, e)
         return ()
-    urls = []
+    results = []
     for page in pages:
         info = page.get("imageinfo", [{}])[0]
         img_url = info.get("thumburl") or info.get("url")
         mime = info.get("mime", "")
-        if img_url and ("image/jpeg" in mime or "image/png" in mime):
-            urls.append(img_url)
-    return tuple(urls)
+        md = info.get("extmetadata", {})
+        license_name = _strip_html(md.get("LicenseShortName", {}).get("value", ""))
+        if not img_url or not ("image/jpeg" in mime or "image/png" in mime):
+            continue
+        if not license_name or _BLOCKED_LICENSE.search(license_name):
+            continue
+        results.append({
+            "url": img_url,
+            "title": page.get("title", ""),
+            "page_url": info.get("descriptionurl", ""),
+            "author": _strip_html(md.get("Artist", {}).get("value", "")) or "Autor desconocido",
+            "license": license_name,
+            "license_url": md.get("LicenseUrl", {}).get("value", ""),
+            "attribution_required": md.get("AttributionRequired", {}).get("value", "true") != "false",
+        })
+    return tuple(results)
 
 
-def _fetch_from_wikimedia_commons(prompt: str, output_path: Path, keywords: Optional[str] = None, aspect_ratio: str = "16:9", index: int = 0) -> bool:
-    """
-    Descarga el candidato número `index` de Wikimedia Commons (fotografías históricas, mapas, archivos).
-    Ideal para historia, guerras, biografías y ciencia.
-    """
-    query = keywords or _extract_keywords_from_prompt(prompt)
-    # Traducir o normalizar términos comunes en español a inglés para archivos internacionales
-    translations = {
-        "agujeros negros": "black hole",
-        "agujero negro": "black hole",
-        "segunda guerra mundial": "world war ii",
-        "primera guerra mundial": "world war i",
-        "biblioteca de alejandria": "library of alexandria ancient",
-        "multiverso": "multiverse physics",
-        "inmortalidad cuantica": "quantum physics",
-    }
+def _scene_archive_queries(prompt: str, keywords: Optional[str], decade: Optional[str]) -> list[str]:
+    """Consultas por escena: palabras clave con la década de la época, luego sin ella y simplificadas."""
+    query = (keywords or _extract_keywords_from_prompt(prompt)).strip()
     q_clean = query.lower()
-    for es_term, en_term in translations.items():
+    for es_term, en_term in _ARCHIVE_TRANSLATIONS.items():
         if es_term in q_clean:
             query = q_clean.replace(es_term, en_term)
             break
-
-    queries_to_try = [query]
+    queries = []
+    if decade and decade not in query and not re.search(r"\b1[0-9]{3}s?\b", query):
+        queries.append(f"{query} {decade}")
+    queries.append(query)
     words = query.split()
     if len(words) > 3:
-        queries_to_try.append(" ".join(words[:3]))
+        queries.append(" ".join(words[:3]))
+    return queries
 
-    target_width = 1080 if aspect_ratio == "9:16" else 1920
-    urls: list[str] = []
-    for q in queries_to_try:
-        urls += [u for u in _wikimedia_search(q, target_width) if u not in urls]
-        if len(urls) > index:
-            break
-    if index >= len(urls):
-        return False
 
-    logger.info("Descargando candidato #{} de Wikimedia Commons para '{}'...", index + 1, query)
+def _download_candidate(meta: dict, output_path: Path, aspect_ratio: str, headers: Optional[dict] = None) -> Optional[dict]:
     try:
-        dl = requests.get(urls[index], headers=_WIKIMEDIA_HEADERS, timeout=15)
+        dl = requests.get(meta["url"], headers=headers, timeout=15)
         if dl.status_code == 200 and len(dl.content) > 10000:
             output_path.write_bytes(dl.content)
             _normalize_image_to_resolution(output_path, aspect_ratio)
-            return True
+            return meta
     except Exception as e:
-        logger.warning("Fallo al descargar de Wikimedia Commons: {}", e)
-    return False
+        logger.warning("Fallo al descargar candidato {}: {}", meta.get("url", "")[:80], e)
+    return None
+
+
+def _fetch_from_wikimedia_commons(
+    queries: list[tuple[str, int]],
+    output_path: Path,
+    aspect_ratio: str = "16:9",
+    index: int = 0,
+) -> Optional[dict]:
+    """
+    Descarga el candidato número `index` de Wikimedia Commons combinando varias consultas.
+    queries: [(consulta, rotación)]; la rotación reparte entre escenas los resultados de una consulta genérica
+    para que no todas empiecen por la misma foto. Retorna los metadatos (autor, licencia) o None.
+    """
+    target_width = 1080 if aspect_ratio == "9:16" else 1920
+    candidates: list[dict] = []
+    for q, rotate in queries:
+        found = list(_wikimedia_search(q, target_width))
+        if rotate and found:
+            k = rotate % len(found)
+            found = found[k:] + found[:k]
+        seen = {c["url"] for c in candidates}
+        candidates += [c for c in found if c["url"] not in seen]
+        if len(candidates) > index:
+            break
+    if index >= len(candidates):
+        return None
+    meta = candidates[index]
+    logger.info("Descargando de Wikimedia Commons: {} ({})", meta["title"], meta["license"])
+    return _download_candidate(meta, output_path, aspect_ratio, headers=_WIKIMEDIA_HEADERS)
 
 
 @lru_cache(maxsize=256)
-def _pexels_search(query: str, orientation: str) -> tuple[str, ...]:
-    """Busca en Pexels API y retorna las URLs de las fotos (en caché por sesión)."""
+def _pexels_search(query: str, orientation: str) -> tuple[dict, ...]:
+    """Busca en Pexels API y retorna las fotos con su autor (en caché por sesión)."""
     api_key = getattr(settings, "PEXELS_API_KEY", "") or os.getenv("PEXELS_API_KEY", "")
     headers = {"Authorization": api_key, "User-Agent": "EducationalVideoBot/1.0 (educational documentary video)"}
     orient_param = f"&orientation={orientation}" if orientation else ""
@@ -334,16 +377,24 @@ def _pexels_search(query: str, orientation: str) -> tuple[str, ...]:
     except Exception as e:
         logger.debug("Error en búsqueda Pexels ('{}'): {}", query, e)
         return ()
-    urls = []
+    results = []
     for p in photos:
         src = p.get("src", {})
         img_url = src.get("large2x") or src.get("large") or src.get("portrait") or src.get("original")
         if img_url:
-            urls.append(img_url)
-    return tuple(urls)
+            results.append({
+                "url": img_url,
+                "title": p.get("alt", ""),
+                "page_url": p.get("url", ""),
+                "author": p.get("photographer", ""),
+                "license": "Pexels License",
+                "license_url": "https://www.pexels.com/license/",
+                "attribution_required": False,
+            })
+    return tuple(results)
 
 
-def _fetch_from_pexels(prompt: str, keywords: str, output_path: Path, aspect_ratio: str = "16:9", index: int = 0) -> bool:
+def _fetch_from_pexels(prompt: str, keywords: str, output_path: Path, aspect_ratio: str = "16:9", index: int = 0) -> Optional[dict]:
     """
     Descarga el candidato número `index` de Pexels usando una cascada de consultas
     (específica -> simplificada -> sin filtro de orientación). La auditoría se hace por lote después.
@@ -351,7 +402,7 @@ def _fetch_from_pexels(prompt: str, keywords: str, output_path: Path, aspect_rat
     api_key = getattr(settings, "PEXELS_API_KEY", "") or os.getenv("PEXELS_API_KEY", "")
     if not api_key:
         logger.debug("Pexels API key no configurada (PEXELS_API_KEY). Saltando Pexels.")
-        return False
+        return None
 
     # 1. Construir cascada inteligente de términos de búsqueda
     primary_query = (keywords or "").strip()
@@ -377,24 +428,17 @@ def _fetch_from_pexels(prompt: str, keywords: str, output_path: Path, aspect_rat
             search_strategies.append((query_candidates[1], target_orientation))
         search_strategies.append((query_candidates[0], ""))
 
-    urls: list[str] = []
+    candidates: list[dict] = []
     for query, orientation in search_strategies:
-        urls += [u for u in _pexels_search(query, orientation) if u not in urls]
-        if len(urls) > index:
+        seen = {c["url"] for c in candidates}
+        candidates += [c for c in _pexels_search(query, orientation) if c["url"] not in seen]
+        if len(candidates) > index:
             break
-    if index >= len(urls):
-        return False
+    if index >= len(candidates):
+        return None
 
     logger.info("Descargando candidato #{} de Pexels para '{}'...", index + 1, primary_query or extracted_prompt_query)
-    try:
-        dl = requests.get(urls[index], timeout=10)
-        if dl.status_code == 200 and len(dl.content) > 10000:
-            output_path.write_bytes(dl.content)
-            _normalize_image_to_resolution(output_path, aspect_ratio)
-            return True
-    except Exception as e:
-        logger.debug("Error descargando foto de Pexels: {}", e)
-    return False
+    return _download_candidate(candidates[index], output_path, aspect_ratio)
 
 
 def _fetch_from_nasa_archive(prompt: str, output_path: Path, scene_id: int, aspect_ratio: str = "16:9") -> bool:
@@ -476,8 +520,17 @@ def _generate_procedural_fallback_image(scene_id: int, prompt: str, output_path:
 
 
 # Máximo de candidatos por fuente para cada escena
-_SOURCE_LIMITS = {"fal": 1, "imagen": 1, "pollinations": 2, "pexels": 4, "nasa": 1, "wikimedia": 4}
+_SOURCE_LIMITS = {
+    "wikimedia_topic": 3, "wikimedia_scene": 3, "pexels": 3, "nasa": 1,
+    "fal": 1, "imagen": 1, "pollinations": 2,
+}
 MAX_AUDIT_ROUNDS = 4
+
+FetchFn = Callable[[Path, int], Optional[dict]]
+
+
+def _ai_meta(provider_name: str, ok: bool) -> Optional[dict]:
+    return {"title": "", "author": provider_name, "license": "Generada por IA", "attribution_required": False} if ok else None
 
 
 def _build_source_plan(
@@ -486,10 +539,11 @@ def _build_source_plan(
     aspect_ratio: str,
     visual_contract: Optional[object],
     topic_seed: Optional[int],
-) -> list[tuple[str, Callable[[Path, int], bool]]]:
+) -> list[tuple[str, FetchFn]]:
     """
-    Define el orden de fuentes para una escena. Cada fuente descarga su candidato número `index`
-    sin auditarlo: la auditoría visual se hace después, por lote (src/quality_gate.py).
+    Define el orden de fuentes para una escena: archivo real primero (Wikimedia por tema y por escena),
+    luego stock (Pexels), NASA y por último IA. Cada fuente descarga su candidato número `index`
+    sin auditarlo (la auditoría visual se hace después, por lote) y retorna sus metadatos de autor/licencia.
     """
     selected_provider = (provider or settings.IMAGE_PROVIDER).lower()
     shot_type = scene.shot_type or "macro_detail"
@@ -498,19 +552,41 @@ def _build_source_plan(
     cohesive_prompt = _build_cohesive_prompt(prompt, visual_contract, shot_type=shot_type, aspect_ratio=aspect_ratio)
     scene_seed = (topic_seed + scene.scene_id * 31) if topic_seed is not None else None
 
-    plan: list[tuple[str, Callable[[Path, int], bool]]] = []
+    era = getattr(visual_contract, "era_setting", "") or ""
+    year = re.search(r"\b(1[0-9]{3})\b", era)
+    decade = f"{int(year.group(1)) // 10 * 10}s" if year else None
+    topic_terms = (getattr(visual_contract, "archive_search_terms", None) or "").strip()
 
-    # 1. Fal.ai Flux-Schnell (si hay API Key de Fal o se selecciona fal)
+    plan: list[tuple[str, FetchFn]] = []
+
+    # 1. Wikimedia por tema: fotos reales del hecho (ej. "Emu War"), primero combinadas con la escena
+    if topic_terms:
+        scene_words = " ".join(keywords.split()[:2])
+        topic_queries = [(f"{topic_terms} {scene_words}".strip(), 0), (topic_terms, scene.scene_id - 1)]
+        plan.append(("wikimedia_topic", lambda out, i: _fetch_from_wikimedia_commons(topic_queries, out, aspect_ratio, index=i)))
+
+    # 2. Wikimedia por escena, con la década de la época
+    scene_queries = [(q, 0) for q in _scene_archive_queries(prompt, keywords, decade)]
+    plan.append(("wikimedia_scene", lambda out, i: _fetch_from_wikimedia_commons(scene_queries, out, aspect_ratio, index=i)))
+
+    # 3. Pexels API (stock contemporáneo: útil para paisajes y objetos atemporales)
+    plan.append(("pexels", lambda out, i: _fetch_from_pexels(prompt, keywords, out, aspect_ratio=aspect_ratio, index=i)))
+
+    # 4. NASA (solo temas astronómicos)
+    plan.append(("nasa", lambda out, i: {"title": "", "author": "NASA", "license": "NASA (dominio público)", "attribution_required": False}
+                 if _fetch_from_nasa_archive(prompt, out, scene.scene_id, aspect_ratio=aspect_ratio) else None))
+
+    # 5. Fal.ai Flux-Schnell (si hay API Key de Fal o se selecciona fal)
     if selected_provider == "fal" or (settings.IMAGE_API_KEY and settings.IMAGE_API_KEY.startswith("fal_")):
-        plan.append(("fal", lambda out, i: _generate_with_fal(cohesive_prompt, out, aspect_ratio=aspect_ratio)
-                     and _normalize_image_to_resolution(out, aspect_ratio)))
+        plan.append(("fal", lambda out, i: _ai_meta("Fal.ai Flux", bool(
+            _generate_with_fal(cohesive_prompt, out, aspect_ratio=aspect_ratio) and _normalize_image_to_resolution(out, aspect_ratio)))))
 
-    # 2. Google Imagen (si hay API Key de Google configurada o se selecciona imagen)
+    # 6. Google Imagen (si hay API Key de Google configurada o se selecciona imagen)
     if selected_provider == "imagen" or (settings.IMAGE_API_KEY and "AIza" in settings.IMAGE_API_KEY):
-        plan.append(("imagen", lambda out, i: _generate_with_google_imagen(cohesive_prompt, out, aspect_ratio=aspect_ratio)
-                     and _normalize_image_to_resolution(out, aspect_ratio)))
+        plan.append(("imagen", lambda out, i: _ai_meta("Google Imagen", bool(
+            _generate_with_google_imagen(cohesive_prompt, out, aspect_ratio=aspect_ratio) and _normalize_image_to_resolution(out, aspect_ratio)))))
 
-    # 3. Pollinations: sin clave, los temas bélicos se omiten (el modelo gratuito los degrada)
+    # 7. Pollinations: sin clave, los temas bélicos se omiten (el modelo gratuito los degrada)
     has_custom_key = bool(
         getattr(settings, "POLLINATIONS_API_KEY", "")
         or (settings.IMAGE_API_KEY and not settings.IMAGE_API_KEY.startswith("tu_clave"))
@@ -523,28 +599,24 @@ def _build_source_plan(
     if has_custom_key or not any(re.search(term, p_check) for term in combat_terms):
         remedy_prompt = f"{cohesive_prompt}, uninhabited scene, absolutely no humans, no people, clean frame, no watermarks, no logos"
 
-        def _pollinations(out: Path, i: int) -> bool:
+        def _pollinations(out: Path, i: int) -> Optional[dict]:
             if i == 0:
-                return _generate_with_pollinations_flux(cohesive_prompt, out, aspect_ratio=aspect_ratio, seed=scene_seed)
-            remedy_seed = (scene_seed + 101 * i) if scene_seed is not None else None
-            return _generate_with_pollinations_flux(remedy_prompt, out, aspect_ratio=aspect_ratio, seed=remedy_seed)
+                ok = _generate_with_pollinations_flux(cohesive_prompt, out, aspect_ratio=aspect_ratio, seed=scene_seed)
+            else:
+                remedy_seed = (scene_seed + 101 * i) if scene_seed is not None else None
+                ok = _generate_with_pollinations_flux(remedy_prompt, out, aspect_ratio=aspect_ratio, seed=remedy_seed)
+            return _ai_meta("Pollinations", ok)
 
         plan.append(("pollinations", _pollinations))
-
-    # 4. Pexels API (fotografía real contextual)
-    plan.append(("pexels", lambda out, i: _fetch_from_pexels(prompt, keywords, out, aspect_ratio=aspect_ratio, index=i)))
-
-    # 5. NASA (solo temas astronómicos)
-    plan.append(("nasa", lambda out, i: _fetch_from_nasa_archive(prompt, out, scene.scene_id, aspect_ratio=aspect_ratio)))
-
-    # 6. Wikimedia Commons (archivo histórico real)
-    plan.append(("wikimedia", lambda out, i: _fetch_from_wikimedia_commons(prompt, out, keywords, aspect_ratio=aspect_ratio, index=i)))
 
     return plan
 
 
 def _fetch_next_candidate(state: dict, output_path: Path) -> Optional[str]:
-    """Descarga el siguiente candidato del plan de fuentes de la escena. Retorna el nombre de la fuente o None."""
+    """
+    Descarga el siguiente candidato del plan de fuentes de la escena.
+    Retorna el nombre de la fuente (y deja sus metadatos en state["meta"]) o None si no quedan candidatos.
+    """
     plan = state["plan"]
     while state["pos"] < len(plan):
         name, fetch = plan[state["pos"]]
@@ -554,11 +626,12 @@ def _fetch_next_candidate(state: dict, output_path: Path) -> Optional[str]:
             continue
         state["tries"][name] = tries + 1
         try:
-            ok = bool(fetch(output_path, tries))
+            meta = fetch(output_path, tries)
         except Exception as e:
             logger.warning("Fuente '{}' falló para escena #{:03d}: {}", name, state["idx"], e)
-            ok = False
-        if ok and output_path.exists() and output_path.stat().st_size > 10000:
+            meta = None
+        if meta is not None and output_path.exists() and output_path.stat().st_size > 10000:
+            state["meta"] = meta
             return name
         state["pos"] += 1  # fuente caída o sin más resultados: pasar a la siguiente
     return None
@@ -635,12 +708,13 @@ def generate_images_for_scenes(
         )
         logger.info("[{}/{}] Buscando candidato para Escena #{:03d} (Plano: '{}'): '{}...'", idx, total, idx, scene.shot_type, scene.visual_prompt[:60])
         source = _fetch_next_candidate(state, paths[idx])
-        if source is None and paths[idx].exists():
+        if source is None and state.get("meta") is not None:
             return idx, "keep"  # sin más candidatos: se conserva el último para revisión humana
         if source is None:
             _generate_procedural_fallback_image(idx, scene.visual_prompt, paths[idx], aspect_ratio=aspect_ratio)
         return idx, source
 
+    vision_down = False
     for round_no in range(1, MAX_AUDIT_ROUNDS + 1):
         if to_fetch:
             logger.info("Ronda {}/{}: descargando candidatos para {} escena(s)...", round_no, MAX_AUDIT_ROUNDS, len(to_fetch))
@@ -652,7 +726,7 @@ def generate_images_for_scenes(
                     if source is None:
                         entries[idx].update(source="procedural", audit="no_source", reason="Ninguna fuente entregó un candidato", issues=[])
                     else:
-                        entries[idx].update(source=source, audit="pending", reason="", issues=[])
+                        entries[idx].update(source=source, credit=states[idx]["meta"], audit="pending", reason="", issues=[])
                         to_audit.add(idx)
 
         # Duplicados: se conserva la primera aparición y se re-intentan las demás
@@ -667,6 +741,9 @@ def generate_images_for_scenes(
             if not qa_enabled:
                 for i in to_audit:
                     entries[i].update(audit="disabled", reason="Auditoría de visión deshabilitada")
+            elif vision_down:
+                for i in to_audit:
+                    entries[i].update(audit="unaudited", reason="Visión no disponible (fail-closed)")
             else:
                 items = [
                     {"idx": i, "path": paths[i], "narration": scenes[i - 1].narration_text,
@@ -675,9 +752,11 @@ def generate_images_for_scenes(
                 ]
                 verdicts = audit_images_batch(items, era=era)
                 if verdicts is None:
+                    # Sin visión no se audita más, pero se siguen reemplazando duplicados
+                    vision_down = True
+                    verdicts = {}
                     for i in to_audit:
                         entries[i].update(audit="unaudited", reason="Visión no disponible (fail-closed)")
-                    break
                 for i, (approved, reason, issues) in verdicts.items():
                     entries[i].update(audit="approved" if approved else "rejected", reason=reason, issues=issues)
                     if not approved:

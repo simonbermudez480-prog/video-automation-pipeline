@@ -43,6 +43,10 @@ class VisualContract(BaseModel):
     shot_progression_rules: str = Field(
         description="Reglas de dirección cinematográfica para evitar face-morphing (priorizar planos detalle, macro, siluetas, tomas over-the-shoulder y tomas de ambiente)"
     )
+    archive_search_terms: Optional[str] = Field(
+        default=None,
+        description="Nombre canónico en inglés del evento, persona o tema tal como aparece en archivos fotográficos (ej: 'Emu War', 'Emperor Norton', 'Jordan Belfort'). 1 a 4 palabras, sin adjetivos."
+    )
 
 
 class Scene(BaseModel):
@@ -101,6 +105,7 @@ DIRECTRICES DE COHERENCIA VISUAL (VISUAL CONTRACT & ANTI-FACE-MORPHING):
    - 'lighting_atmosphere': Iluminación envolvente consistente (ej: 'Low-key atmospheric lighting, diffused rain highlights, soft haze').
    - 'character_anchor': Si hay un protagonista (ej: D.B. Cooper, emperador, científico), define su descripción canónica exacta (vestimenta, peinado, accesorios distintivos).
    - 'shot_progression_rules': Regla estricta de dirección para evitar rostros mutantes.
+   - 'archive_search_terms': Nombre canónico en inglés del evento, persona o tema tal como aparecería en Wikimedia Commons (ej: 'Emu War', 'Emperor Norton'). Se usa para encontrar fotografías reales del hecho.
 
 7. REGLA DE ORO DE PLANOS DETALLE (ANTI FACE-MORPHING):
    - NUNCA repitas retratos genéricos del rostro de frente del protagonista en múltiples escenas, ya que la IA cambiará sus facciones y destruirá la inmersión.
