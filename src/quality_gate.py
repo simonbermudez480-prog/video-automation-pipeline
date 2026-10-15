@@ -25,6 +25,8 @@ DUPLICATE_MAX_DISTANCE = 5
 MAX_MERGED_SCENES = 2  # escenas sin imagen válida que pueden extender la imagen anterior
 DUPLICATE_MAX_COLOR_DIFF = 12  # diferencia media por canal (0-255) en miniatura 16x16
 AUDIT_BATCH_SIZE = 16
+# Resolución enviada al revisor: a 432x768 las marcas de agua tenues (ej. "©Old World Auctions") desaparecían
+AUDIT_IMAGE_SIZE = (864, 1536)
 
 _VISION_LOCK = threading.Lock()
 _LAST_VISION_CALL = 0.0
@@ -109,17 +111,25 @@ def _build_batch_prompt(items: list[dict], era: str, topic: str = "") -> str:
         "You will receive several candidate images, each preceded by its label 'IMAGE <n>'.",
         "Each image has a SOURCE type. Apply the rules for its source:",
         "",
+        "WATERMARKS (all sources, check first): scan every image carefully, including its edges, for watermarks that may be faint,",
+        "  semi-transparent, small or repeated in a diagonal/tiled pattern: '©' notices, auction houses or dealers, stock agencies",
+        "  (Alamy, Getty, Shutterstock, iStock...), photographer or museum stamps added later, URLs. Any such watermark → reject (WATERMARK_OR_TEXT).",
+        "  Printed text that belongs to the original historical item (map labels, banknote text, document text) is NOT a watermark.",
+        "",
         "ARCHIVE (real historical material from a public archive: photographs, and also period paintings, portraits,",
         "  engravings, maps, banknotes and documents; before the 1840s there is no photography, so these are the expected archive material):",
         "- Judge it against the NARRATION and the historical event/topic, NOT against the exact camera framing of the intended subject.",
         "- Approve it if it plausibly shows the event, its place, its people, its objects or its era. A related photo of the same event is acceptable even if it shows a different moment.",
         "- People from the period are expected and fine. Black-and-white, grain, low resolution or old damage are fine.",
+        "- Later photos of the SAME real place or object (ruins, memorials, containment structures, the place today) are correct, not anachronisms,",
+        "  when the narration talks about the aftermath, consequences, legacy or how the place is now.",
         "- Reject: photos from a clearly different era, country or conflict (ANACHRONISM); unrelated subjects (ABSURD_DISSONANCE);",
         "  collages, multi-panel montages, memes or modern graphics (COLLAGE); maps or text documents when the narration describes an action (ABSURD_DISSONANCE);",
         "  watermarks or overlaid modern text (WATERMARK_OR_TEXT).",
         "",
         "STOCK (a contemporary stock photo):",
-        "- Only acceptable for timeless subjects that fit the narration: landscapes, nature, animals, generic old objects.",
+        "- Only acceptable for timeless subjects that fit the narration: landscapes, nature, animals, generic old objects,",
+        "  or present-day photos of the SAME real place when the narration talks about the aftermath, legacy or the place today.",
         "- Reject any modern element: modern people, clothing, vehicles, weapons, equipment or buildings (ANACHRONISM);",
         "  people when the scene does not call for them (UNWANTED_HUMAN); unrelated subjects (ABSURD_DISSONANCE); watermarks (WATERMARK_OR_TEXT);",
         "  visible text that is gibberish, invented or misspelled (WATERMARK_OR_TEXT).",
@@ -284,7 +294,7 @@ def audit_images_batch(items: list[dict], era: str = "", topic: str = "") -> Opt
         for it in batch:
             with Image.open(it["path"]) as im:
                 thumb = im.convert("RGB")
-                thumb.thumbnail((432, 768))
+                thumb.thumbnail(AUDIT_IMAGE_SIZE)
             contents += [f"IMAGE {it['idx']}:", thumb]
 
         logger.info("Auditoría visual por lote: {} imagen(es) en una sola llamada...", len(batch))
