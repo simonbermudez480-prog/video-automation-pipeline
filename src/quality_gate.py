@@ -22,6 +22,7 @@ from src.logger import logger
 
 MANIFEST_NAME = "image_manifest.json"
 DUPLICATE_MAX_DISTANCE = 5
+MAX_MERGED_SCENES = 2  # escenas sin imagen válida que pueden extender la imagen anterior
 DUPLICATE_MAX_COLOR_DIFF = 12  # diferencia media por canal (0-255) en miniatura 16x16
 AUDIT_BATCH_SIZE = 16
 
@@ -326,43 +327,48 @@ class GateResult:
     passed: bool
     reasons: list[str] = field(default_factory=list)
     failing_scenes: set[int] = field(default_factory=set)
+    merges: dict[int, int] = field(default_factory=dict)  # {escena sin imagen válida: escena aprobada que se extiende}
 
 
 def evaluate_gate(image_paths: list[Path], manifest: dict) -> GateResult:
-    """Aplica FR-12.1 y FR-12.2: decide si el video puede publicarse automáticamente."""
+    """
+    Aplica FR-12 y FR-14.6: decide si el video puede publicarse automáticamente.
+    Una escena sin imagen válida (fondo procedural, duplicada o sin aprobación visual) se fusiona con la
+    escena válida anterior, hasta MAX_MERGED_SCENES por video y nunca la primera. Si se supera, el video se bloquea.
+    """
     reasons: list[str] = []
-    failing: set[int] = set()
     paths = {i: p for i, p in enumerate(image_paths, start=1)}
+    problems: dict[int, str] = {}
 
-    placeholders = [i for i, p in paths.items() if is_procedural_placeholder(p)]
-    hook_placeholders = [i for i in placeholders if i <= 3]
-    if hook_placeholders:
-        reasons.append(f"Fondo procedural en el gancho (escenas {hook_placeholders})")
-    if len(placeholders) > 1:
-        reasons.append(f"{len(placeholders)} fondos procedurales en total (escenas {placeholders})")
-    failing.update(placeholders if (hook_placeholders or len(placeholders) > 1) else [])
-
-    duplicates = find_duplicates({i: p for i, p in paths.items() if i not in placeholders})
-    if duplicates:
-        pairs = ", ".join(f"{dup}={orig}" for dup, orig in sorted(duplicates.items()))
-        reasons.append(f"Imágenes duplicadas (escena=original): {pairs}")
-        failing.update(duplicates)
-
+    for i, p in paths.items():
+        if is_procedural_placeholder(p):
+            problems[i] = "fondo procedural"
+    duplicates = find_duplicates({i: p for i, p in paths.items() if i not in problems})
+    for dup, orig in duplicates.items():
+        problems[dup] = f"duplicada de la escena {orig}"
     scenes = manifest.get("scenes", {})
-    not_approved = []
     for i in paths:
         status = scenes.get(str(i), {}).get("audit", "unaudited")
-        if status not in ("approved", "disabled"):
-            not_approved.append(f"{i}:{status}")
-            failing.add(i)
-    if not_approved:
-        reasons.append(f"Escenas sin aprobación visual: {', '.join(not_approved)}")
+        if status not in ("approved", "disabled") and i not in problems:
+            problems[i] = status
 
-    return GateResult(passed=not reasons, reasons=reasons, failing_scenes=failing)
+    merges: dict[int, int] = {}
+    detail = ", ".join(f"{i}:{why}" for i, why in sorted(problems.items()))
+    if 1 in problems:
+        reasons.append(f"La primera escena no tiene imagen válida ({problems[1]}). Escenas con problemas: {detail}")
+    elif len(problems) > MAX_MERGED_SCENES:
+        reasons.append(f"{len(problems)} escenas sin imagen válida (máximo fusionable: {MAX_MERGED_SCENES}): {detail}")
+    else:
+        for i in sorted(problems):
+            merges[i] = max(j for j in paths if j < i and j not in problems)
+
+    return GateResult(passed=not reasons, reasons=reasons, failing_scenes=set(problems), merges=merges)
 
 
-def build_contact_sheet(image_paths: list[Path], output_path: Path, failing: set[int] = frozenset(), cols: int = 7) -> Path:
-    """Genera una hoja de contacto numerada; las escenas con problemas llevan borde rojo."""
+def build_contact_sheet(
+    image_paths: list[Path], output_path: Path, failing: set[int] = frozenset(), cols: int = 7, merged: set[int] = frozenset()
+) -> Path:
+    """Genera una hoja de contacto numerada: verde = válida, naranja = se fusiona con la anterior, rojo = bloquea."""
     tile_w, tile_h, border = 216, 384, 6
     rows = (len(image_paths) + cols - 1) // cols
     sheet = Image.new("RGB", (cols * tile_w, rows * tile_h), (0, 0, 0))
@@ -372,7 +378,7 @@ def build_contact_sheet(image_paths: list[Path], output_path: Path, failing: set
         x, y = ((n - 1) % cols) * tile_w, ((n - 1) // cols) * tile_h
         with Image.open(path) as im:
             sheet.paste(im.convert("RGB").resize((tile_w, tile_h)), (x, y))
-        color = (220, 40, 40) if n in failing else (40, 190, 80)
+        color = (240, 150, 30) if n in merged else (220, 40, 40) if n in failing else (40, 190, 80)
         draw.rectangle([x, y, x + tile_w - 1, y + tile_h - 1], outline=color, width=border)
         draw.rectangle([x + border, y + border, x + 70, y + 46], fill=(0, 0, 0))
         draw.text((x + 12, y + 8), f"#{n}", fill=(255, 255, 255), font=font)
@@ -385,7 +391,9 @@ def run_quality_gate(image_paths: list[Path], contact_sheet_path: Path) -> GateR
     """Evalúa el gate con el manifiesto de la carpeta de imágenes y genera la hoja de contacto."""
     manifest = load_manifest(image_paths[0].parent) if image_paths else {"scenes": {}}
     result = evaluate_gate(image_paths, manifest)
-    build_contact_sheet(image_paths, contact_sheet_path, result.failing_scenes)
+    build_contact_sheet(image_paths, contact_sheet_path, result.failing_scenes, merged=set(result.merges))
+    for scene, target in sorted(result.merges.items()):
+        logger.warning("Escena #{:03d} sin imagen válida: se extiende la imagen de la escena #{:03d}.", scene, target)
     if result.passed:
         logger.success("Control de calidad visual SUPERADO. Hoja de contacto: {}", contact_sheet_path)
     else:

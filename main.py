@@ -38,7 +38,7 @@ from src.voice_synthesizer import synthesize_voice
 from src.audio_processor import process_audio_and_align
 from src.image_generator import generate_images_for_scenes
 from src.quality_gate import MANIFEST_NAME, run_quality_gate
-from src.video_assembler import assemble_video, choose_look
+from src.video_assembler import apply_scene_merges, assemble_video, choose_look
 from src.youtube_uploader import upload_video_to_youtube
 from src.social_copywriter import generate_social_copy, SocialBundle
 from src.multiplatform_publisher import publish_video_multiplatform
@@ -257,6 +257,13 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
                 raise FileNotFoundError(f"Falta la imagen requerida: {p}")
             image_paths.append(p)
 
+    # Control de calidad visual (FR-12 / FR-14.6): decide qué escenas se fusionan antes del montaje
+    contact_sheet = OUTPUT_DIR / "review" / f"{target_video_path.stem}_contact.png"
+    gate = run_quality_gate(image_paths, contact_sheet) if image_paths else None
+    assembly_scenes, assembly_images = (
+        apply_scene_merges(script_data.scenes, image_paths, gate.merges) if gate else (script_data.scenes, image_paths)
+    )
+
     # -------------------------------------------------------------
     # PASO 5: Montaje Audiovisual con Efecto Dinámico (FFmpeg)
     # -------------------------------------------------------------
@@ -264,8 +271,8 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
     if not args.skip_video:
         logger.info("\n>>> [{}/{}] [PASO 5/6] Ensamblando video {} con Ken Burns y subtítulos quemados en zona segura...", job_index, total_jobs, aspect_ratio)
         final_video = assemble_video(
-            scenes=script_data.scenes,
-            image_paths=image_paths,
+            scenes=assembly_scenes,
+            image_paths=assembly_images,
             audio_path=narration_audio,
             subtitles_path=subtitles_file,
             output_video_path=target_video_path,
@@ -296,13 +303,12 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
     create_social_pack = not getattr(args, "no_social_pack", False)
 
     # Control de calidad visual previo a publicar (FR-12): bloquea la publicación automática si falla
-    if platforms_to_publish and image_paths:
-        contact_sheet = OUTPUT_DIR / "review" / f"{final_video.stem}_contact.png"
-        gate = run_quality_gate(image_paths, contact_sheet)
+    if platforms_to_publish and gate:
         quality_report = {
             "status": "passed" if gate.passed else "needs_review",
             "reasons": gate.reasons,
             "failing_scenes": sorted(gate.failing_scenes),
+            "merged_scenes": {str(k): v for k, v in sorted(gate.merges.items())},
             "contact_sheet": str(contact_sheet),
         }
         approved = gate.passed and not args.require_approval

@@ -37,6 +37,27 @@ def choose_look(visual_contract: Optional[object]) -> str:
     return "archival" if years and min(years) < ARCHIVAL_ERA_CUTOFF else "cinematic"
 
 
+def apply_scene_merges(scenes: List[Scene], image_paths: List[Path], merges: dict[int, int]) -> tuple[List[Scene], List[Path]]:
+    """
+    Fusiona cada escena sin imagen válida con la escena válida anterior (FR-14.6): la escena se quita del
+    montaje y su duración se suma a la anterior, que queda más tiempo en pantalla. La narración no cambia.
+    merges: {índice de escena (1-based): índice de la escena que se extiende}.
+    """
+    kept_scenes: List[Scene] = []
+    kept_paths: List[Path] = []
+    for idx, (scene, path) in enumerate(zip(scenes, image_paths), start=1):
+        if idx in merges and kept_scenes:
+            prev = kept_scenes[-1]
+            kept_scenes[-1] = prev.model_copy(update={
+                "duration": (prev.duration or 6.0) + (scene.duration or 6.0),
+                "end_time": scene.end_time,
+            })
+            continue
+        kept_scenes.append(scene)
+        kept_paths.append(path)
+    return kept_scenes, kept_paths
+
+
 def _get_dynamic_ken_burns_filter(
     scene_index: int,
     num_frames: int,
