@@ -98,7 +98,7 @@
   - [ ] 16.5b Créditos de licencias en la descripción de la publicación (FR-13.8).
   - [ ] 16.6 Verificar: producir video de prueba sin publicar, revisar hoja de contacto completa y comparar contra la del Emú.
 
-- [ ] **Phase 17: Revisión visual siempre disponible y publicación diferida** (Requisitos: FR-14)
+- [x] **Phase 17: Revisión visual siempre disponible y publicación diferida** (Requisitos: FR-14)
   - [x] 17.1 Descubrimiento automático de modelos de visión gratuitos (FR-14.1).
   - [x] 17.2 Errores diferenciados: cuota diaria, límite por minuto, saturación, petición no soportada (FR-14.2).
   - [x] 17.3 Soporte de modelos sin modo JSON (FR-14.3).
@@ -115,5 +115,6 @@
     - Observación: 18 s sobre una sola foto es largo para Shorts.
     - Fallo previo detectado (no causado por la fusión): el video sale ~0,5 s más corto que la narración (Emú publicado: 126,67 s vs 127,16 s) y `-shortest` corta el final de la voz.
   - [x] 17.4e Corregido el corte del final de la narración (2026-10-15) en `video_assembler.py`: el último clip también se extiende `TRANSITION_DURATION` (los fundidos empiezan 0,5 s antes de cada cambio y adelantaban todo el video), frames redondeados en vez de truncados, y `tpad` congela el último frame como red de seguridad. Verificado: audio de 43,480 s → audio en el video 43,480 s (antes 42,957 s); cambios de escena sin desfase; también con subtítulos quemados y con una sola escena.
-  - [ ] 17.5 Cola de publicación diferida en `output/queue/` y `--process-queue` (FR-14.4, FR-14.5).
-  - [ ] 17.6 Verificar la cola con publicación simulada y documentar la tarea programada de Windows.
+  - [x] 17.5 Cola de publicación diferida (`src/publish_queue.py`): `main.py` encola cuando el control falla por escenas sin revisar (`GateResult.unaudited`); `--process-queue` re-audita solo lo pendiente, vuelve a montar con las fusiones finales y publica si pasa el control; resultados en `done/` o `needs_review/`. La publicación se extrajo a `publish_social` para compartirla. `ask_yes_no` trata la entrada cerrada (EOF) como "no".
+  - [x] 17.6 Verificado (2026-10-15) sin publicar nada real: (a) con visión simulada caída el trabajo queda en cola (1 intento); (b) con visión real re-audita, aprueba 1/2/5, rechaza 3/4, fusiona {3→2, 4→2}, re-monta (30,0 s con audio completo), llama una vez a la publicación simulada y pasa a `done/`; (c) `main.py` real con `--skip-*` y `--publish-platforms youtube` encola el video (`quality_report` = `queued`); la entrada de prueba se retiró de `output/queue/`; (d) `--process-queue` con cola vacía funciona. Tarea programada documentada en el README (no creada).
+    - Fallos encontrados y corregidos en la verificación: en Git Bash `isatty()` es verdadero aunque no haya entrada y `input()` lanzaba `EOFError`; las escenas sin registro en el manifiesto contaban como "sin revisar" para el control pero no para la cola.

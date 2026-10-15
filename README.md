@@ -193,3 +193,23 @@ YOUTUBE_PRIVACY_STATUS=private  # private | unlisted | public
 5. Selecciona **Tipo de aplicación: Aplicación de escritorio (Desktop App)**.
 6. Descarga el archivo JSON y renómbralo como `client_secrets.json` en la raíz de este proyecto.
 7. Al ejecutar con `--upload`, se abrirá el navegador para autorizar una única vez.
+
+## ⏳ Cola de publicación diferida (`--process-queue`)
+
+Si al publicar no hay cuota de revisión visual disponible (todas las escenas o varias quedan *sin revisar*), el video no se descarta: se guarda en `output/queue/` y el reporte del trabajo queda en estado `queued`.
+
+```bash
+python main.py --process-queue
+```
+
+Este comando re-audita solo las escenas pendientes, vuelve a montar el video con las fusiones finales y lo publica únicamente si supera el control de calidad completo. Los resultados se mueven a `output/queue/done/` (publicado) o `output/queue/needs_review/` (rechazado por la revisión o por ti). Si sigue sin haber cuota, el trabajo se queda en la cola para el próximo intento.
+
+**Aprobación humana:** si el video se produjo sin `--no-approval`, la cola pide confirmación en la terminal; en una ejecución sin terminal (tarea programada) ese trabajo espera en la cola. Para que la cola publique sola, produce el video con `--no-approval`.
+
+**Tarea programada de Windows (cada 3 horas)**, desde PowerShell, ajustando la ruta de Python si hace falta:
+
+```powershell
+schtasks /Create /TN "VideosEducativos-Cola" /SC HOURLY /MO 3 /TR "cmd /c cd /d \"C:\Users\simon\OneDrive\Documents\Videos educativos\" && python main.py --process-queue --no-approval >> logs\cola.log 2>&1"
+```
+
+Con `--no-approval` en la tarea se omite la confirmación también para trabajos encolados que la pedían; quítalo si quieres seguir aprobando a mano.

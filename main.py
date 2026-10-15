@@ -38,6 +38,7 @@ from src.voice_synthesizer import synthesize_voice
 from src.audio_processor import process_audio_and_align
 from src.image_generator import generate_images_for_scenes
 from src.quality_gate import MANIFEST_NAME, run_quality_gate
+from src.publish_queue import ask_yes_no, enqueue, process_queue
 from src.video_assembler import apply_scene_merges, assemble_video, choose_look
 from src.youtube_uploader import upload_video_to_youtube
 from src.social_copywriter import generate_social_copy, SocialBundle
@@ -115,6 +116,54 @@ def extract_topics(args: argparse.Namespace) -> List[str]:
         unique_topics = ["La teoria de la muerte y el multiverso"]
 
     return unique_topics
+
+
+def publish_social(
+    topic: str,
+    narration_full: str,
+    video_path: Path,
+    platforms: List[str],
+    create_social_pack: bool,
+    privacy: Optional[str],
+    llm_provider: Optional[str],
+    duration_minutes: Optional[float],
+) -> None:
+    """Redacta los copies con IA y publica/empaqueta el video (usado por el flujo normal y por la cola)."""
+    try:
+        social_bundle = generate_social_copy(
+            topic=topic,
+            narration_summary=narration_full,
+            duration_seconds=(duration_minutes or 1.0) * 60.0,
+            provider=llm_provider,
+        )
+        logger.info("Copies listos: Título YouTube = '{}'", social_bundle.youtube_shorts.title)
+
+        pub_results = publish_video_multiplatform(
+            video_path=video_path,
+            bundle=social_bundle,
+            platforms=platforms,
+            create_package=create_social_pack,
+            privacy=privacy,
+        )
+        if "youtube" in pub_results and pub_results["youtube"].get("url"):
+            logger.success("Video disponible en YouTube: {}", pub_results["youtube"]["url"])
+    except Exception as e:
+        logger.error("Error durante la generación de copies o publicación social: {}", e)
+
+
+def publish_queued(entry: dict, video_path: Path) -> None:
+    """Publica un trabajo de la cola diferida con las opciones guardadas al encolarlo."""
+    script = ScriptOutput.model_validate_json(Path(entry["script_path"]).read_text(encoding="utf-8"))
+    publish_social(
+        topic=entry["topic"],
+        narration_full=script.narration_full,
+        video_path=video_path,
+        platforms=entry["platforms"],
+        create_social_pack=entry.get("create_social_pack", True),
+        privacy=entry.get("privacy"),
+        llm_provider=entry.get("llm_provider"),
+        duration_minutes=entry.get("duration_minutes"),
+    )
 
 
 def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: int, total_jobs: int) -> Path:
@@ -312,17 +361,42 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             "contact_sheet": str(contact_sheet),
         }
         approved = gate.passed and not args.require_approval
-        if args.require_approval:
+        images_dir = image_paths[0].parent
+        if not gate.passed and gate.unaudited:
+            # Falta capacidad de revisión visual (no hay rechazos que lo impidan): se publica más tarde desde la cola
+            queued_script = job_dir / "queued_script.json"
+            save_script_to_disk(script_data, target_path=queued_script)
+            enqueue({
+                "topic": topic,
+                "job_dir": str(job_dir),
+                "script_path": str(queued_script),
+                "images_dir": str(images_dir),
+                "audio_path": str(narration_audio),
+                "subtitles_path": str(subtitles_file) if subtitles_file else None,
+                "burn_subtitles": not args.no_subtitles,
+                "aspect_ratio": aspect_ratio,
+                "video_path": str(target_video_path),
+                "contact_sheet": str(contact_sheet),
+                "platforms": platforms_to_publish,
+                "privacy": args.privacy,
+                "require_approval": args.require_approval,
+                "create_social_pack": create_social_pack,
+                "llm_provider": args.llm_provider,
+                "duration_minutes": args.duration_minutes,
+            })
+            quality_report["status"] = "queued"
+            platforms_to_publish = []
+            create_social_pack = False
+        elif args.require_approval:
             if sys.stdin and sys.stdin.isatty():
-                answer = input(
+                approved = ask_yes_no(
                     f"\nRevisa la hoja de contacto: {contact_sheet}\n"
                     f"Control de calidad: {'SUPERADO' if gate.passed else 'FALLIDO'}. ¿Publicar en {', '.join(platforms_to_publish)}? [s/N]: "
                 )
-                approved = answer.strip().lower() in ("s", "si", "sí", "y", "yes")
                 quality_report["human_decision"] = "approved" if approved else "rejected"
             else:
                 logger.warning("Se requiere aprobación humana y no hay terminal interactiva (usa --no-approval para omitirla).")
-        if not approved:
+        if not approved and quality_report["status"] != "queued":
             logger.error("Publicación BLOQUEADA: el video queda marcado 'needs_review'. Solo se genera el paquete local.")
             quality_report["status"] = "needs_review"
             platforms_to_publish = []
@@ -334,27 +408,16 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             job_index,
             total_jobs,
         )
-        try:
-            est_seconds = (args.duration_minutes or 1.0) * 60.0
-            social_bundle = generate_social_copy(
-                topic=topic,
-                narration_summary=script_data.narration_full,
-                duration_seconds=est_seconds,
-                provider=args.llm_provider,
-            )
-            logger.info("Copies listos: Título YouTube = '{}'", social_bundle.youtube_shorts.title)
-
-            pub_results = publish_video_multiplatform(
-                video_path=final_video,
-                bundle=social_bundle,
-                platforms=platforms_to_publish,
-                create_package=create_social_pack,
-                privacy=args.privacy,
-            )
-            if "youtube" in pub_results and pub_results["youtube"].get("url"):
-                logger.success("Video disponible en YouTube: {}", pub_results["youtube"]["url"])
-        except Exception as e:
-            logger.error("Error durante la generación de copies o publicación social: {}", e)
+        publish_social(
+            topic=topic,
+            narration_full=script_data.narration_full,
+            video_path=final_video,
+            platforms=platforms_to_publish,
+            create_social_pack=create_social_pack,
+            privacy=args.privacy,
+            llm_provider=args.llm_provider,
+            duration_minutes=args.duration_minutes,
+        )
     else:
         logger.info(
             "\n>>> [{}/{}] [PASO 6/6] Publicación social omitida (usa --publish-all o --publish para publicar en Shorts, Reels y TikTok).",
@@ -553,6 +616,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Especificar redes para publicación (ej: --publish-platforms youtube instagram)",
     )
     parser.add_argument(
+        "--process-queue",
+        action="store_true",
+        help="Procesar la cola de publicación diferida (output/queue/): re-auditar, re-montar y publicar lo que pase el control",
+    )
+    parser.add_argument(
         "--no-approval",
         dest="require_approval",
         action="store_false",
@@ -587,6 +655,9 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     try:
+        if args.process_queue:
+            process_queue(publish_queued, require_approval=args.require_approval)
+            return
         execute_pipeline(args)
     except KeyboardInterrupt:
         logger.warning("\nOperación cancelada por el usuario.")

@@ -328,6 +328,7 @@ class GateResult:
     reasons: list[str] = field(default_factory=list)
     failing_scenes: set[int] = field(default_factory=set)
     merges: dict[int, int] = field(default_factory=dict)  # {escena sin imagen válida: escena aprobada que se extiende}
+    unaudited: set[int] = field(default_factory=set)  # escenas que solo fallan por falta de revisión visual
 
 
 def evaluate_gate(image_paths: list[Path], manifest: dict) -> GateResult:
@@ -362,7 +363,8 @@ def evaluate_gate(image_paths: list[Path], manifest: dict) -> GateResult:
         for i in sorted(problems):
             merges[i] = max(j for j in paths if j < i and j not in problems)
 
-    return GateResult(passed=not reasons, reasons=reasons, failing_scenes=set(problems), merges=merges)
+    unaudited = {i for i, why in problems.items() if why == "unaudited"}
+    return GateResult(passed=not reasons, reasons=reasons, failing_scenes=set(problems), merges=merges, unaudited=unaudited)
 
 
 def build_contact_sheet(
