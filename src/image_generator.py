@@ -8,22 +8,23 @@ Soporta:
 4. API de Pexels (fotos de stock reales si se define PEXELS_API_KEY)
 5. Pollinations.ai vía URL directa: https://image.pollinations.ai/prompt/{prompt}?width=1920&height=1080&nologo=true
 6. NASA Deep Space & Cosmology Archive (fotografías espaciales reales en 4K)
-7. Picsum Photos HD (fotografía documental real 1920x1080 con semillas temáticas)
-* Se han eliminado por completo los fondos planos o artificiales.
+7. Wikimedia Commons (archivo histórico real)
+Los candidatos se auditan por lote con Gemini Vision (src/quality_gate.py); ninguno se aprueba sin auditoría visual.
 """
+import hashlib
 import os
 import re
-import json
-import time
-import threading
+import shutil
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 import requests
 
 from src.config import settings
 from src.logger import logger
+from src.quality_gate import audit_images_batch, find_duplicates, load_manifest, save_manifest
 from src.script_generator import Scene
 
 # Encabezados estándar de navegador para evitar bloqueos
@@ -46,7 +47,7 @@ def _generate_with_google_imagen(prompt: str, output_path: Path, aspect_ratio: s
         from google.genai import types
 
         api_key = settings.IMAGE_API_KEY or settings.GEMINI_API_KEY
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=api_key, http_options={"timeout": 25000})
 
         result = client.models.generate_images(
             model="imagen-3.0-generate-002",
@@ -241,11 +242,39 @@ def _generate_with_pollinations_flux(
         return False
 
 
+_WIKIMEDIA_HEADERS = {"User-Agent": "EducationalVideoBot/1.0 (educational; open-source documentary)"}
 
-def _fetch_from_wikimedia_commons(prompt: str, output_path: Path, scene_id: int, keywords: Optional[str] = None, aspect_ratio: str = "16:9") -> bool:
+
+@lru_cache(maxsize=256)
+def _wikimedia_search(query: str, target_width: int) -> tuple[str, ...]:
+    """Busca imágenes JPEG/PNG en Wikimedia Commons y retorna sus URLs (en caché por sesión)."""
+    url = (
+        f"https://commons.wikimedia.org/w/api.php?action=query&generator=search"
+        f"&gsrsearch={urllib.parse.quote(query)}&gsrnamespace=6&format=json"
+        f"&prop=imageinfo&iiprop=url|mime&iiurlwidth={target_width}"
+    )
+    try:
+        resp = requests.get(url, headers=_WIKIMEDIA_HEADERS, timeout=12)
+        if resp.status_code != 200:
+            return ()
+        pages = sorted(resp.json().get("query", {}).get("pages", {}).values(), key=lambda p: p.get("index", 0))
+    except Exception as e:
+        logger.warning("Fallo al consultar Wikimedia Commons ('{}'): {}", query, e)
+        return ()
+    urls = []
+    for page in pages:
+        info = page.get("imageinfo", [{}])[0]
+        img_url = info.get("thumburl") or info.get("url")
+        mime = info.get("mime", "")
+        if img_url and ("image/jpeg" in mime or "image/png" in mime):
+            urls.append(img_url)
+    return tuple(urls)
+
+
+def _fetch_from_wikimedia_commons(prompt: str, output_path: Path, keywords: Optional[str] = None, aspect_ratio: str = "16:9", index: int = 0) -> bool:
     """
-    Obtiene fotografías históricas, científicas y documentales auténticas en alta resolución
-    desde el archivo público de Wikimedia Commons. Ideal para historia, guerras, biografías y ciencia.
+    Descarga el candidato número `index` de Wikimedia Commons (fotografías históricas, mapas, archivos).
+    Ideal para historia, guerras, biografías y ciencia.
     """
     query = keywords or _extract_keywords_from_prompt(prompt)
     # Traducir o normalizar términos comunes en español a inglés para archivos internacionales
@@ -264,182 +293,65 @@ def _fetch_from_wikimedia_commons(prompt: str, output_path: Path, scene_id: int,
             query = q_clean.replace(es_term, en_term)
             break
 
-    logger.info("Consultando archivo histórico Wikimedia Commons para: '{}'...", query)
-
     queries_to_try = [query]
     words = query.split()
     if len(words) > 3:
         queries_to_try.append(" ".join(words[:3]))
 
-    headers = {"User-Agent": "EducationalVideoBot/1.0 (educational; open-source documentary)"}
     target_width = 1080 if aspect_ratio == "9:16" else 1920
-
+    urls: list[str] = []
     for q in queries_to_try:
-        url = (
-            f"https://commons.wikimedia.org/w/api.php?action=query&generator=search"
-            f"&gsrsearch={urllib.parse.quote(q)}&gsrnamespace=6&format=json"
-            f"&prop=imageinfo&iiprop=url|mime&iiurlwidth={target_width}"
-        )
-        try:
-            resp = requests.get(url, headers=headers, timeout=12)
-            if resp.status_code == 200:
-                pages = resp.json().get("query", {}).get("pages", {})
-                for pid, page in pages.items():
-                    info = page.get("imageinfo", [{}])[0]
-                    img_url = info.get("thumburl") or info.get("url")
-                    mime = info.get("mime", "")
-                    if img_url and ("image/jpeg" in mime or "image/png" in mime or img_url.lower().endswith((".jpg", ".jpeg", ".png"))):
-                        dl = requests.get(img_url, headers=headers, timeout=15)
-                        if dl.status_code == 200 and len(dl.content) > 10000:
-                            output_path.write_bytes(dl.content)
-                            _normalize_image_to_resolution(output_path, aspect_ratio)
-                            logger.success("Fotografía histórica auténtica obtenida de Wikimedia Commons: {}", page.get("title", output_path.name))
-                            return True
-        except Exception as e:
-            logger.warning("Fallo al consultar Wikimedia Commons ('{}'): {}", q, e)
+        urls += [u for u in _wikimedia_search(q, target_width) if u not in urls]
+        if len(urls) > index:
+            break
+    if index >= len(urls):
+        return False
 
+    logger.info("Descargando candidato #{} de Wikimedia Commons para '{}'...", index + 1, query)
+    try:
+        dl = requests.get(urls[index], headers=_WIKIMEDIA_HEADERS, timeout=15)
+        if dl.status_code == 200 and len(dl.content) > 10000:
+            output_path.write_bytes(dl.content)
+            _normalize_image_to_resolution(output_path, aspect_ratio)
+            return True
+    except Exception as e:
+        logger.warning("Fallo al descargar de Wikimedia Commons: {}", e)
     return False
 
 
-_VISION_AUDIT_LOCK = threading.Lock()
-_LAST_VISION_AUDIT_TIME = 0.0
-_EXHAUSTED_VISION_MODELS: set[str] = set()
-
-
-def audit_image_with_gemini_vision(
-    image_path: Path,
-    scene_text: str = "",
-    scene_prompt: str = "",
-    shot_type: Optional[str] = None,
-) -> tuple[bool, str, list[str]]:
-    """
-    Audita una imagen generada o descargada usando Gemini Vision para certificar:
-    1. Cero humanos/mujeres fuera de contexto (especialmente en planos de ambiente o macro).
-    2. Cero marcas de agua, logos comerciales o texto superpuesto no deseado.
-    3. Coherencia semántica real con la narración y el tema (rechaza fotos absurdas o desconectadas).
-
-    POLÍTICA FAIL-CLOSED: Si los modelos de visión están saturados temporalmente tras los reintentos,
-    la imagen NO se aprueba; se descarta por seguridad para evitar imágenes disonantes.
-    """
-    if not getattr(settings, "ENABLE_IMAGE_QA_GATEKEEPER", True):
-        return True, "Auditoría de visión deshabilitada", []
-
-    api_key = settings.GEMINI_API_KEY
-    if not api_key:
-        return True, "GEMINI_API_KEY no disponible para auditoría", []
-
-    if not image_path.exists() or image_path.stat().st_size < 5000:
-        return False, "Archivo de imagen inexistente o corrupto", ["EMPTY_OR_CORRUPT"]
-
-    from PIL import Image
-    from google import genai
-
-    client = genai.Client(api_key=api_key)
-    candidate_models = settings.get_gemini_vision_candidates()
-
+@lru_cache(maxsize=256)
+def _pexels_search(query: str, orientation: str) -> tuple[str, ...]:
+    """Busca en Pexels API y retorna las URLs de las fotos (en caché por sesión)."""
+    api_key = getattr(settings, "PEXELS_API_KEY", "") or os.getenv("PEXELS_API_KEY", "")
+    headers = {"Authorization": api_key, "User-Agent": "EducationalVideoBot/1.0 (educational documentary video)"}
+    orient_param = f"&orientation={orientation}" if orientation else ""
+    url = f"https://api.pexels.com/v1/search?query={urllib.parse.quote(query)}{orient_param}&per_page=5"
     try:
-        with Image.open(image_path) as pil_img:
-            img = pil_img.copy()
-    except Exception as img_err:
-        logger.warning("No se pudo cargar la imagen para auditoría visual: {}", img_err)
-        return False, f"Error cargando imagen: {img_err}", ["LOAD_ERROR"]
-
-    audit_prompt = f"""You are an uncompromising QA inspector for historical and educational documentary videos.
-Audit this candidate image for Scene Context:
-- Narration: "{scene_text}"
-- Shot Type: "{shot_type or 'unspecified'}"
-- Intended Subject: "{scene_prompt}"
-
-Evaluate 3 critical disqualifiers:
-1. UNWANTED_HUMAN: Does the image feature an accidental, modern, or out-of-context person, woman, or man when the intended shot is an environmental/macro/nature/artifact scene without specified characters? (If shot_type is environmental_wide or macro_detail, any human is strictly forbidden. If the scene is about historical events or military figures, any random modern woman, model, or selfie is strictly forbidden).
-2. WATERMARK_OR_TEXT: Does the image contain visible watermarks (such as 'pollinations.ai', 'shutterstock', stock logos), intrusive text overlays, subtitles, website URLs, or modern branding?
-3. ABSURD_DISSONANCE: Is the image completely irrelevant or disconnected from the narration? (For example: house plants, pets, dogs, succulents, domestic interiors, libraries, or kitchen items when the narration is about historical battles, diplomacy, naval ships, islands, or warfare). The image must tangibly or atmospherically fit the described scene.
-
-Output strictly in JSON format:
-{{
-  "approved": true or false,
-  "reason": "Brief explanation in Spanish",
-  "detected_issues": ["UNWANTED_HUMAN" | "WATERMARK_OR_TEXT" | "ABSURD_DISSONANCE"]
-}}
-"""
-
-    global _LAST_VISION_AUDIT_TIME, _EXHAUSTED_VISION_MODELS
-    with _VISION_AUDIT_LOCK:
-        for model in candidate_models:
-            if model in _EXHAUSTED_VISION_MODELS:
-                continue
-
-            # Pacing governor: garantizar al menos 1.2s entre peticiones para proteger el rate limit gratuito
-            elapsed = time.time() - _LAST_VISION_AUDIT_TIME
-            if elapsed < 1.2:
-                time.sleep(1.2 - elapsed)
-            _LAST_VISION_AUDIT_TIME = time.time()
-
-            try:
-                resp = client.models.generate_content(
-                    model=model,
-                    contents=[img, audit_prompt],
-                    config={"response_mime_type": "application/json"}
-                )
-                raw_text = resp.text or "{}"
-                data = json.loads(raw_text)
-                approved = bool(data.get("approved", True))
-                reason = str(data.get("reason", "Aprobado"))
-                issues = list(data.get("detected_issues", []))
-
-                if not approved:
-                    logger.warning(
-                        "[Guardián QA Vision] Imagen '{}' RECHAZADA por '{}' (Problemas: {}): {}",
-                        image_path.name, model, ", ".join(issues) or "Inconsistencia", reason
-                    )
-                else:
-                    logger.info(
-                        "[Guardián QA Vision] Imagen '{}' APROBADA por '{}': {}",
-                        image_path.name, model, reason
-                    )
-                return approved, reason, issues
-            except Exception as e:
-                err_msg = str(e)
-                if "RESOURCE_EXHAUSTED" in err_msg or "per_day" in err_msg or "PerDay" in err_msg or "quota" in err_msg.lower():
-                    logger.warning("Modelo Gemini Vision '{}' agotó su cuota (RESOURCE_EXHAUSTED). Marcado como no disponible para esta sesión.", model)
-                    _EXHAUSTED_VISION_MODELS.add(model)
-                    continue
-                elif "503" in err_msg or "429" in err_msg or "UNAVAILABLE" in err_msg:
-                    logger.debug("Modelo Gemini Vision '{}' temporalmente no disponible: {}. Probando siguiente en cascada...", model, e)
-                    continue
-                logger.warning("Error en auditoría visual con Gemini modelo '{}': {}. Probando siguiente...", model, e)
-                continue
-
-    logger.warning(
-        "Guardián QA Vision: Modelos de visión saturados temporalmente. POLÍTICA FAIL-CLOSED: La imagen '{}' se descarta por seguridad para evitar imágenes disonantes.",
-        image_path.name
-    )
-    return False, "Modelos de visión saturados o inaccesibles (Fail-Closed)", ["VISION_UNAVAILABLE"]
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code != 200:
+            return ()
+        photos = resp.json().get("photos", [])
+    except Exception as e:
+        logger.debug("Error en búsqueda Pexels ('{}'): {}", query, e)
+        return ()
+    urls = []
+    for p in photos:
+        src = p.get("src", {})
+        img_url = src.get("large2x") or src.get("large") or src.get("portrait") or src.get("original")
+        if img_url:
+            urls.append(img_url)
+    return tuple(urls)
 
 
-def _fetch_from_pexels(
-    prompt: str,
-    keywords: str,
-    output_path: Path,
-    aspect_ratio: str = "16:9",
-    scene_text: str = "",
-    shot_type: Optional[str] = None,
-) -> bool:
+def _fetch_from_pexels(prompt: str, keywords: str, output_path: Path, aspect_ratio: str = "16:9", index: int = 0) -> bool:
     """
-    Obtiene fotografías de stock documental en alta resolución de Pexels API
-    usando una cascada inteligente de consultas (específica -> simplificada -> sin filtro de orientación)
-    y auditando cada candidato en tiempo real con el Guardián Gemini Vision.
+    Descarga el candidato número `index` de Pexels usando una cascada de consultas
+    (específica -> simplificada -> sin filtro de orientación). La auditoría se hace por lote después.
     """
     api_key = getattr(settings, "PEXELS_API_KEY", "") or os.getenv("PEXELS_API_KEY", "")
     if not api_key:
         logger.debug("Pexels API key no configurada (PEXELS_API_KEY). Saltando Pexels.")
         return False
-
-    is_vertical = aspect_ratio == "9:16"
-    headers = {
-        "Authorization": api_key,
-        "User-Agent": "EducationalVideoBot/1.0 (educational documentary video)"
-    }
 
     # 1. Construir cascada inteligente de términos de búsqueda
     primary_query = (keywords or "").strip()
@@ -456,98 +368,32 @@ def _fetch_from_pexels(
     if extracted_prompt_query and extracted_prompt_query not in query_candidates:
         query_candidates.append(extracted_prompt_query)
 
-    # Añadir variantes simplificadas sin fechas numéricas o adjetivos específicos
-    for q in list(query_candidates):
-        cleaned = re.sub(r"\b(1980s|1982|1940s|1945|south africa|kyalami)\b", "", q, flags=re.IGNORECASE).strip()
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if cleaned and len(cleaned) > 3 and cleaned not in query_candidates:
-            query_candidates.append(cleaned)
-
-    # 2. Estrategias escalonadas y ágiles (máximo 2-3 intentos para evitar saturar rate limits):
+    # 2. Estrategias escalonadas: consulta principal y secundaria en la orientación objetivo, luego orientación abierta
+    target_orientation = "portrait" if aspect_ratio == "9:16" else "landscape"
     search_strategies: list[tuple[str, str]] = []
-    target_orientation = "portrait" if is_vertical else "landscape"
     if query_candidates:
         search_strategies.append((query_candidates[0], target_orientation))
         if len(query_candidates) > 1:
             search_strategies.append((query_candidates[1], target_orientation))
-        search_strategies.append((query_candidates[0], ""))  # Orientación abierta (se ajusta con Lanczos)
+        search_strategies.append((query_candidates[0], ""))
 
-    logger.info("Búsqueda ágil en Pexels API ({} estrategias preparadas)...", len(search_strategies))
-
+    urls: list[str] = []
     for query, orientation in search_strategies:
-        orient_param = f"&orientation={orientation}" if orientation else ""
-        url = f"https://api.pexels.com/v1/search?query={urllib.parse.quote(query)}{orient_param}&per_page=3"
+        urls += [u for u in _pexels_search(query, orientation) if u not in urls]
+        if len(urls) > index:
+            break
+    if index >= len(urls):
+        return False
 
-        try:
-            resp = requests.get(url, headers=headers, timeout=8)
-            if resp.status_code != 200:
-                continue
-
-            photos = resp.json().get("photos", [])
-            if not photos:
-                continue
-
-            for p in photos[:2]:
-                src = p.get("src", {})
-                img_url = src.get("large2x") or src.get("large") or src.get("portrait") or src.get("original")
-                if not img_url:
-                    continue
-
-                dl = requests.get(img_url, timeout=10)
-                if dl.status_code != 200 or len(dl.content) < 10000:
-                    continue
-
-                output_path.write_bytes(dl.content)
-                _normalize_image_to_resolution(output_path, aspect_ratio)
-
-                # Auditoría ágil con el Guardián Gemini Vision
-                approved, reason, issues = audit_image_with_gemini_vision(
-                    output_path,
-                    scene_text=scene_text or prompt,
-                    scene_prompt=prompt,
-                    shot_type=shot_type,
-                )
-
-                if approved:
-                    logger.success(
-                        "Fotografía de stock de Pexels APROBADA por el Guardián Gemini Vision para '{}': {}",
-                        query, p.get("alt", p.get("id"))
-                    )
-                    return True
-
-                # Salvaguarda inteligente: Si la cuota diaria de Gemini Vision se agotó (20 req/día),
-                # validar rigurosamente los metadatos y curaduría de Pexels para evitar fotos negras procedurales.
-                if "VISION_UNAVAILABLE" in issues:
-                    alt_desc = (p.get("alt") or "").lower()
-                    toxic_tokens = [
-                        "woman", "girl", "female", "lady", "model", "portrait", "bikini", "lingerie",
-                        "looking at camera", "selfie", "dog", "puppy", "cat", "kitten", "pet", "pets",
-                        "wedding", "bride", "groom", "baby", "infant", "toddler", "fashion", "dress",
-                        "sunglasses", "glasses", "pose", "posing", "studio", "modern"
-                    ]
-                    has_toxic_token = any(tok in alt_desc for tok in toxic_tokens)
-                    if not has_toxic_token:
-                        logger.success(
-                            "Fotografía de stock de Pexels APROBADA por Guardián de Metadatos (Anti-Poisoning) para '{}': {}",
-                            query, p.get("alt", p.get("id"))
-                        )
-                        return True
-                    else:
-                        logger.warning(
-                            "Candidato de Pexels ('{}') descartado por Guardián de Metadatos (humano/elemento no deseado). Evaluando siguiente...",
-                            p.get("alt", p.get("id"))
-                        )
-                        continue
-
-                logger.warning(
-                    "Candidato de Pexels ('{}') rechazado por el Guardián ({}): {}.",
-                    p.get("alt", p.get("id")), ", ".join(issues) or "Inconsistencia", reason
-                )
-        except Exception as e:
-            logger.debug("Error en intento Pexels ('{}'): {}", query, e)
-            continue
-
-    logger.warning("No se encontró ninguna imagen de Pexels que superara la auditoría del Guardián.")
+    logger.info("Descargando candidato #{} de Pexels para '{}'...", index + 1, primary_query or extracted_prompt_query)
+    try:
+        dl = requests.get(urls[index], timeout=10)
+        if dl.status_code == 200 and len(dl.content) > 10000:
+            output_path.write_bytes(dl.content)
+            _normalize_image_to_resolution(output_path, aspect_ratio)
+            return True
+    except Exception as e:
+        logger.debug("Error descargando foto de Pexels: {}", e)
     return False
 
 
@@ -591,69 +437,10 @@ def _fetch_from_nasa_archive(prompt: str, output_path: Path, scene_id: int, aspe
         return False
 
 
-def _fetch_from_picsum_verified(
-    prompt: str,
-    output_path: Path,
-    scene_id: int,
-    aspect_ratio: str = "16:9",
-    scene_text: str = "",
-    shot_type: Optional[str] = None,
-) -> bool:
-    """
-    Descarga fotografías reales de alta definición desde Picsum Photos
-    auditadas por el Guardián Gemini Vision para garantizar que no contengan
-    personas fuera de contexto ni discordancias absurdas.
-    """
-    target_w, target_h = (1080, 1920) if aspect_ratio == "9:16" else (1920, 1080)
-    logger.info("Descargando y auditando fotografía documental (Picsum HD + Gemini QA)...")
-
-    # IDs curados de Picsum que corresponden a paisajes puros, agua, montañas, texturas y arquitectura abierta
-    curated_nature_ids = [
-        10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 28, 29, 37, 42, 49,
-        58, 59, 110, 111, 116, 122, 129, 137, 142, 152, 164,
-        175, 184, 197, 214, 219, 225, 235, 248, 256, 260, 274, 287
-    ]
-
-    seeds_to_try = [
-        curated_nature_ids[(scene_id * 7) % len(curated_nature_ids)],
-        curated_nature_ids[(scene_id * 13 + 3) % len(curated_nature_ids)],
-        f"docu_landscape_{scene_id}",
-    ]
-
-    for candidate in seeds_to_try:
-        if isinstance(candidate, int):
-            url = f"https://picsum.photos/id/{candidate}/{target_w}/{target_h}"
-        else:
-            url = f"https://picsum.photos/seed/{candidate}/{target_w}/{target_h}"
-
-        try:
-            resp = requests.get(url, headers=BROWSER_HEADERS, timeout=12)
-            if resp.status_code == 200 and len(resp.content) > 10000:
-                output_path.write_bytes(resp.content)
-                _normalize_image_to_resolution(output_path, aspect_ratio)
-
-                # Auditoría rigurosa con Gemini Vision
-                approved, reason, issues = audit_image_with_gemini_vision(
-                    output_path,
-                    scene_text=scene_text or prompt,
-                    scene_prompt=prompt,
-                    shot_type=shot_type,
-                )
-                if approved:
-                    logger.success("Fotografía documental de Picsum auditada y aprobada para escena #{:03d}", scene_id)
-                    return True
-                else:
-                    logger.warning("Foto Picsum descartada por Gemini Vision ({}): {}", issues, reason)
-        except Exception as e:
-            logger.warning("Fallo en intento Picsum: {}", e)
-
-    return False
-
-
 def _generate_procedural_fallback_image(scene_id: int, prompt: str, output_path: Path, aspect_ratio: str = "16:9") -> bool:
     """
-    Genera un fondo visual cinemático procedural de alta resolución (gradiente documental + viñeta)
-    como red de seguridad absoluta cuando ningún repositorio externo responde.
+    Genera un fondo procedural (gradiente oscuro) como último recurso para que el montaje no se rompa.
+    El control de calidad (src/quality_gate.py) lo detecta y bloquea la publicación.
     """
     try:
         from PIL import Image, ImageDraw
@@ -681,152 +468,104 @@ def _generate_procedural_fallback_image(scene_id: int, prompt: str, output_path:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         img.save(output_path, format="PNG")
-        logger.warning("Fondo cinemático procedural generado como salvaguarda para escena #{:03d}: {}", scene_id, output_path.name)
+        logger.warning("Fondo procedural generado como salvaguarda para escena #{:03d}: {}", scene_id, output_path.name)
         return True
     except Exception as e:
         logger.error("Error al generar fondo procedural: {}", e)
         return False
 
 
-def generate_single_image(
-    scene_id: int,
-    prompt: str,
-    output_path: Path,
-    provider: Optional[str] = None,
-    keywords: Optional[str] = None,
-    aspect_ratio: str = "16:9",
-    visual_contract: Optional[object] = None,
-    shot_type: Optional[str] = None,
-    topic_seed: Optional[int] = None,
-    scene_text: str = "",
-) -> bool:
+# Máximo de candidatos por fuente para cada escena
+_SOURCE_LIMITS = {"fal": 1, "imagen": 1, "pollinations": 2, "pexels": 4, "nasa": 1, "wikimedia": 4}
+MAX_AUDIT_ROUNDS = 4
+
+
+def _build_source_plan(
+    scene: Scene,
+    provider: Optional[str],
+    aspect_ratio: str,
+    visual_contract: Optional[object],
+    topic_seed: Optional[int],
+) -> list[tuple[str, Callable[[Path, int], bool]]]:
     """
-    Genera u obtiene una imagen real (16:9 o 9:16) mediante una cascada inteligente de calidad y contexto,
-    reforzada con la biblia visual global (VisualContract) y auditada por el Guardián Gemini Vision.
+    Define el orden de fuentes para una escena. Cada fuente descarga su candidato número `index`
+    sin auditarlo: la auditoría visual se hace después, por lote (src/quality_gate.py).
     """
     selected_provider = (provider or settings.IMAGE_PROVIDER).lower()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 0. Enriquecer el prompt con el contrato visual y desinfectar términos ambiguos
+    shot_type = scene.shot_type or "macro_detail"
+    prompt = scene.visual_prompt
+    keywords = scene.search_keywords or ""
     cohesive_prompt = _build_cohesive_prompt(prompt, visual_contract, shot_type=shot_type, aspect_ratio=aspect_ratio)
-    
-    # Semilla determinista por escena para coherencia estética y de ruido
-    scene_seed = (topic_seed + scene_id * 31) if topic_seed is not None else None
+    scene_seed = (topic_seed + scene.scene_id * 31) if topic_seed is not None else None
+
+    plan: list[tuple[str, Callable[[Path, int], bool]]] = []
 
     # 1. Fal.ai Flux-Schnell (si hay API Key de Fal o se selecciona fal)
-    if selected_provider == "fal" or (
-        settings.IMAGE_API_KEY and settings.IMAGE_API_KEY.startswith("fal_")
-    ):
-        if _generate_with_fal(cohesive_prompt, output_path, aspect_ratio=aspect_ratio):
-            _normalize_image_to_resolution(output_path, aspect_ratio)
-            approved, reason, _ = audit_image_with_gemini_vision(
-                output_path,
-                scene_text=scene_text or prompt,
-                scene_prompt=prompt,
-                shot_type=shot_type,
-            )
-            if approved:
-                return True
+    if selected_provider == "fal" or (settings.IMAGE_API_KEY and settings.IMAGE_API_KEY.startswith("fal_")):
+        plan.append(("fal", lambda out, i: _generate_with_fal(cohesive_prompt, out, aspect_ratio=aspect_ratio)
+                     and _normalize_image_to_resolution(out, aspect_ratio)))
 
-    # 2. Google Imagen 3 (si hay API Key de Google configurada o se selecciona imagen)
-    if selected_provider == "imagen" or (
-        settings.IMAGE_API_KEY and "AIza" in settings.IMAGE_API_KEY
-    ):
-        if _generate_with_google_imagen(cohesive_prompt, output_path, aspect_ratio=aspect_ratio):
-            _normalize_image_to_resolution(output_path, aspect_ratio)
-            approved, reason, _ = audit_image_with_gemini_vision(
-                output_path,
-                scene_text=scene_text or prompt,
-                scene_prompt=prompt,
-                shot_type=shot_type,
-            )
-            if approved:
-                return True
+    # 2. Google Imagen (si hay API Key de Google configurada o se selecciona imagen)
+    if selected_provider == "imagen" or (settings.IMAGE_API_KEY and "AIza" in settings.IMAGE_API_KEY):
+        plan.append(("imagen", lambda out, i: _generate_with_google_imagen(cohesive_prompt, out, aspect_ratio=aspect_ratio)
+                     and _normalize_image_to_resolution(out, aspect_ratio)))
 
-    # 3. Pollinations (IA generativa gratuita o con clave en 16:9 o 9:16 con semilla consistente)
-    has_combat_keywords = False
+    # 3. Pollinations: sin clave, los temas bélicos se omiten (el modelo gratuito los degrada)
     has_custom_key = bool(
         getattr(settings, "POLLINATIONS_API_KEY", "")
         or (settings.IMAGE_API_KEY and not settings.IMAGE_API_KEY.startswith("tu_clave"))
     )
-    if not has_custom_key:
-        combat_terms = [
-            r"\bwar\b", r"\bbattle\b", r"\bsoldier\b", r"\barmy\b", r"\bhitler\b", r"\bnazi\b",
-            r"\binvasion\b", r"\bmilitary\b", r"\bcombat\b", r"\bbomb\b", r"\bstalingrad\b", r"\bnormandy\b"
-        ]
-        p_check = (cohesive_prompt + " " + (keywords or "")).lower()
-        has_combat_keywords = any(bool(re.search(term, p_check)) for term in combat_terms)
+    combat_terms = [
+        r"\bwar\b", r"\bbattle\b", r"\bsoldier\b", r"\barmy\b", r"\bhitler\b", r"\bnazi\b",
+        r"\binvasion\b", r"\bmilitary\b", r"\bcombat\b", r"\bbomb\b", r"\bstalingrad\b", r"\bnormandy\b"
+    ]
+    p_check = (cohesive_prompt + " " + keywords).lower()
+    if has_custom_key or not any(re.search(term, p_check) for term in combat_terms):
+        remedy_prompt = f"{cohesive_prompt}, uninhabited scene, absolutely no humans, no people, clean frame, no watermarks, no logos"
 
-    if not has_combat_keywords:
-        if _generate_with_pollinations_flux(cohesive_prompt, output_path, aspect_ratio=aspect_ratio, seed=scene_seed):
-            approved, reason, issues = audit_image_with_gemini_vision(
-                output_path,
-                scene_text=scene_text or prompt,
-                scene_prompt=prompt,
-                shot_type=shot_type,
-            )
-            if approved:
-                return True
-            else:
-                logger.warning(
-                    "[Guardián QA Vision] Imagen de IA para Escena #{:03d} rechazada ({}): {}. Reintentando con prompt correctivo reforzado...",
-                    scene_id, ", ".join(issues) or "Inconsistencia", reason
-                )
-                remedy_prompt = f"{cohesive_prompt}, uninhabited scene, absolutely no humans, no people, no portraits, clean frame, no watermarks, no logos"
-                remedy_seed = (scene_seed + 101) if scene_seed is not None else None
-                if _generate_with_pollinations_flux(remedy_prompt, output_path, aspect_ratio=aspect_ratio, seed=remedy_seed):
-                    appr2, reason2, _ = audit_image_with_gemini_vision(
-                        output_path,
-                        scene_text=scene_text or prompt,
-                        scene_prompt=prompt,
-                        shot_type=shot_type,
-                    )
-                    if appr2:
-                        return True
+        def _pollinations(out: Path, i: int) -> bool:
+            if i == 0:
+                return _generate_with_pollinations_flux(cohesive_prompt, out, aspect_ratio=aspect_ratio, seed=scene_seed)
+            remedy_seed = (scene_seed + 101 * i) if scene_seed is not None else None
+            return _generate_with_pollinations_flux(remedy_prompt, out, aspect_ratio=aspect_ratio, seed=remedy_seed)
 
-    # 4. Pexels API (fotografía documental contextual real en alta definición auditada candidato a candidato)
-    if _fetch_from_pexels(
-        prompt=prompt,
-        keywords=keywords or "",
-        output_path=output_path,
-        aspect_ratio=aspect_ratio,
-        scene_text=scene_text or prompt,
-        shot_type=shot_type,
-    ):
-        return True
+        plan.append(("pollinations", _pollinations))
 
-    # 5. NASA Deep Space Archive (fotografías espaciales reales, si es tema astronómico o cosmológico)
-    if _fetch_from_nasa_archive(prompt, output_path, scene_id, aspect_ratio=aspect_ratio):
-        return True
+    # 4. Pexels API (fotografía real contextual)
+    plan.append(("pexels", lambda out, i: _fetch_from_pexels(prompt, keywords, out, aspect_ratio=aspect_ratio, index=i)))
 
-    # 6. Archivo Histórico / Documental Wikimedia Commons (fotografías históricas reales, mapas, archivos)
-    if _fetch_from_wikimedia_commons(prompt, output_path, scene_id, keywords, aspect_ratio=aspect_ratio):
-        approved, reason, _ = audit_image_with_gemini_vision(
-            output_path,
-            scene_text=scene_text or prompt,
-            scene_prompt=prompt,
-            shot_type=shot_type,
-        )
-        if approved:
-            return True
+    # 5. NASA (solo temas astronómicos)
+    plan.append(("nasa", lambda out, i: _fetch_from_nasa_archive(prompt, out, scene.scene_id, aspect_ratio=aspect_ratio)))
 
-    # 7. Repositorio de Fotografía Documental Real Picsum HD (Auditado por el Guardián Gemini Vision)
-    if _fetch_from_picsum_verified(
-        prompt,
-        output_path,
-        scene_id,
-        aspect_ratio=aspect_ratio,
-        scene_text=scene_text or prompt,
-        shot_type=shot_type,
-    ):
-        return True
+    # 6. Wikimedia Commons (archivo histórico real)
+    plan.append(("wikimedia", lambda out, i: _fetch_from_wikimedia_commons(prompt, out, keywords, aspect_ratio=aspect_ratio, index=i)))
 
-    # 8. Red de seguridad cinemática procedural (garantiza frame limpio con viñeta y paleta documental)
-    if _generate_procedural_fallback_image(scene_id, prompt, output_path, aspect_ratio=aspect_ratio):
-        return True
+    return plan
 
-    return False
 
+def _fetch_next_candidate(state: dict, output_path: Path) -> Optional[str]:
+    """Descarga el siguiente candidato del plan de fuentes de la escena. Retorna el nombre de la fuente o None."""
+    plan = state["plan"]
+    while state["pos"] < len(plan):
+        name, fetch = plan[state["pos"]]
+        tries = state["tries"].get(name, 0)
+        if tries >= _SOURCE_LIMITS[name]:
+            state["pos"] += 1
+            continue
+        state["tries"][name] = tries + 1
+        try:
+            ok = bool(fetch(output_path, tries))
+        except Exception as e:
+            logger.warning("Fuente '{}' falló para escena #{:03d}: {}", name, state["idx"], e)
+            ok = False
+        if ok and output_path.exists() and output_path.stat().st_size > 10000:
+            return name
+        state["pos"] += 1  # fuente caída o sin más resultados: pasar a la siguiente
+    return None
+
+
+def _prompt_signature(scene: Scene, aspect_ratio: str) -> str:
+    return hashlib.sha1(f"{aspect_ratio}|{scene.visual_prompt}".encode("utf-8")).hexdigest()[:16]
 
 
 def generate_images_for_scenes(
@@ -838,94 +577,127 @@ def generate_images_for_scenes(
     visual_contract: Optional[object] = None,
 ) -> List[Path]:
     """
-    Itera sobre la lista de escenas del guion y descarga concurrentemente
-    cada imagen real en assets/images/scene_{idx:03d}.png en formato 16:9 o 9:16.
-    Invalida automáticamente la caché si el tema o el aspect ratio cambiaron respecto a la ejecución anterior.
-    Aplica la biblia visual (VisualContract) y el Guardián Gemini Vision para asegurar coherencia total.
+    Obtiene una imagen por escena en assets/images/scene_{idx:03d}.png (16:9 o 9:16):
+    1. Reutiliza imágenes en caché solo si el prompt de la escena no cambió (firma por escena).
+    2. Descarga candidatos de la cascada de fuentes sin auditar.
+    3. Descarta duplicados y audita todo el lote con UNA llamada de visión por ronda.
+    4. Re-intenta solo las escenas rechazadas, hasta MAX_AUDIT_ROUNDS rondas.
+    El estado de cada escena queda en image_manifest.json para el control de calidad previo a publicar.
     """
     target_dir = output_dir or settings.IMAGES_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    # Detección de cambio de tema o formato: purgar caché de imágenes previas
-    topic_cache_file = target_dir / ".current_topic.txt"
-    cache_signature = f"{topic.strip().lower()}_{aspect_ratio}" if topic else f"general_{aspect_ratio}"
-    if topic_cache_file.exists():
-        prev_sig = topic_cache_file.read_text(encoding="utf-8").strip().lower()
-        if prev_sig != cache_signature:
-            logger.warning(
-                "Cambio de tema o formato detectado ('{}' -> '{}'). Purgando imágenes previas para regenerar con resolución correcta.",
-                prev_sig,
-                cache_signature,
-            )
-            for old_img in target_dir.glob("scene_*.png"):
-                try:
-                    old_img.unlink()
-                except Exception:
-                    pass
-    topic_cache_file.write_text(cache_signature, encoding="utf-8")
-
     total = len(scenes)
     workers = getattr(settings, "CONCURRENT_IMAGE_WORKERS", 4)
-    logger.info("Iniciando obtención de {} imágenes reales (Workers: {}, Formato: {}, Tema: '{}')...", total, workers, aspect_ratio, topic or "General")
+    qa_enabled = getattr(settings, "ENABLE_IMAGE_QA_GATEKEEPER", True)
+    era = getattr(visual_contract, "era_setting", "") if visual_contract else ""
+    logger.info("Iniciando obtención de {} imágenes (Workers: {}, Formato: {}, Tema: '{}')...", total, workers, aspect_ratio, topic or "General")
 
-    image_paths_dict = {}
-    pending_items = []
+    manifest = load_manifest(target_dir)
+    cache_manifest = load_manifest(settings.IMAGES_DIR) if target_dir != settings.IMAGES_DIR else manifest
+    entries: dict[int, dict] = {}
+    to_fetch: list[int] = []
+    to_audit: set[int] = set()
 
     for idx, scene in enumerate(scenes, start=1):
         filename = f"scene_{idx:03d}.png"
         img_path = target_dir / filename
+        sig = _prompt_signature(scene, aspect_ratio)
+        cached = manifest["scenes"].get(str(idx), {})
+        shared = cache_manifest["scenes"].get(str(idx), {})
+        shared_path = settings.IMAGES_DIR / filename
 
-        # Si ya existe y pesa más de 10 KB, reutilizarla
-        if img_path.exists() and img_path.stat().st_size > 10000:
-            logger.info("Reutilizando imagen real para escena #{:03d}: {}", idx, img_path.name)
-            image_paths_dict[idx] = img_path
+        if img_path.exists() and img_path.stat().st_size > 10000 and cached.get("prompt_sig") == sig:
+            logger.info("Reutilizando imagen en caché para escena #{:03d} (auditoría previa: {})", idx, cached.get("audit"))
+            entries[idx] = cached
+        elif shared_path.exists() and shared_path.stat().st_size > 10000 and shared.get("prompt_sig") == sig:
+            shutil.copy2(shared_path, img_path)
+            logger.info("Reutilizando imagen de assets/images/ para escena #{:03d} (auditoría previa: {})", idx, shared.get("audit"))
+            entries[idx] = dict(shared)
         else:
-            pending_items.append((idx, scene, img_path))
+            entries[idx] = {"prompt_sig": sig, "source": None, "audit": "pending", "reason": "", "issues": []}
+            to_fetch.append(idx)
+            continue
+        if entries[idx].get("audit") != "approved":
+            to_audit.add(idx)
 
-    if pending_items:
-        logger.info("Adquiriendo concurrentemente {} imágenes requeridas con estilo cinemático coherente...", len(pending_items))
-        base_seed = abs(hash(topic.lower().strip())) % 500000 if topic else 12345
+    paths = {idx: target_dir / f"scene_{idx:03d}.png" for idx in range(1, total + 1)}
+    topic_seed = int(hashlib.sha1(topic.lower().strip().encode("utf-8")).hexdigest(), 16) % 500000 if topic else 12345
+    states = {
+        idx: {"idx": idx, "pos": 0, "tries": {}, "plan": _build_source_plan(scenes[idx - 1], provider, aspect_ratio, visual_contract, topic_seed)}
+        for idx in to_fetch
+    }
 
-        def _fetch_worker(item):
-            s_idx, s_scene, s_path = item
-            shot_type = getattr(s_scene, "shot_type", "detail_macro")
-            logger.info(
-                "[{}/{}] Adquiriendo imagen Escena #{:03d} ({}, Plano: '{}'): '{}...'",
-                s_idx,
-                total,
-                s_scene.scene_id,
-                aspect_ratio,
-                shot_type,
-                s_scene.visual_prompt[:60],
-            )
-            success = generate_single_image(
-                scene_id=s_scene.scene_id,
-                prompt=s_scene.visual_prompt,
-                output_path=s_path,
-                provider=provider,
-                keywords=s_scene.search_keywords,
-                aspect_ratio=aspect_ratio,
-                visual_contract=visual_contract,
-                shot_type=shot_type,
-                topic_seed=base_seed,
-                scene_text=getattr(s_scene, "narration_text", ""),
-            )
-            if not success or not s_path.exists():
-                logger.warning("Generando salvaguarda procedural para Escena #{:03d}...", s_idx)
-                _generate_procedural_fallback_image(s_scene.scene_id, s_scene.visual_prompt, s_path, aspect_ratio=aspect_ratio)
+    def _fetch_worker(idx: int) -> tuple[int, Optional[str]]:
+        scene = scenes[idx - 1]
+        state = states.setdefault(
+            idx, {"idx": idx, "pos": 0, "tries": {}, "plan": _build_source_plan(scene, provider, aspect_ratio, visual_contract, topic_seed)}
+        )
+        logger.info("[{}/{}] Buscando candidato para Escena #{:03d} (Plano: '{}'): '{}...'", idx, total, idx, scene.shot_type, scene.visual_prompt[:60])
+        source = _fetch_next_candidate(state, paths[idx])
+        if source is None and paths[idx].exists():
+            return idx, "keep"  # sin más candidatos: se conserva el último para revisión humana
+        if source is None:
+            _generate_procedural_fallback_image(idx, scene.visual_prompt, paths[idx], aspect_ratio=aspect_ratio)
+        return idx, source
 
-            if not s_path.exists():
-                raise RuntimeError(f"Fallo crítico al obtener imagen para la escena #{s_idx}")
-            return s_idx, s_path
+    for round_no in range(1, MAX_AUDIT_ROUNDS + 1):
+        if to_fetch:
+            logger.info("Ronda {}/{}: descargando candidatos para {} escena(s)...", round_no, MAX_AUDIT_ROUNDS, len(to_fetch))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                for future in as_completed([executor.submit(_fetch_worker, i) for i in to_fetch]):
+                    idx, source = future.result()
+                    if source == "keep":
+                        continue
+                    if source is None:
+                        entries[idx].update(source="procedural", audit="no_source", reason="Ninguna fuente entregó un candidato", issues=[])
+                    else:
+                        entries[idx].update(source=source, audit="pending", reason="", issues=[])
+                        to_audit.add(idx)
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(_fetch_worker, item) for item in pending_items]
-            for future in as_completed(futures):
-                idx_done, path_done = future.result()
-                image_paths_dict[idx_done] = path_done
+        # Duplicados: se conserva la primera aparición y se re-intentan las demás
+        retry: set[int] = set()
+        candidates = {i: p for i, p in paths.items() if entries[i]["audit"] != "no_source"}
+        for dup, orig in find_duplicates(candidates).items():
+            entries[dup].update(audit="duplicate", reason=f"Duplicado de la escena {orig}", issues=["DUPLICATE"])
+            to_audit.discard(dup)
+            retry.add(dup)
 
-    # Reconstruir en orden secuencial estricto
-    image_paths = [image_paths_dict[i] for i in range(1, total + 1)]
-    logger.success("Las {} imágenes reales ({}) fueron adquiridas exitosamente con coherencia visual.", len(image_paths), aspect_ratio)
+        if to_audit:
+            if not qa_enabled:
+                for i in to_audit:
+                    entries[i].update(audit="disabled", reason="Auditoría de visión deshabilitada")
+            else:
+                items = [
+                    {"idx": i, "path": paths[i], "narration": scenes[i - 1].narration_text,
+                     "prompt": scenes[i - 1].visual_prompt, "shot_type": scenes[i - 1].shot_type}
+                    for i in sorted(to_audit)
+                ]
+                verdicts = audit_images_batch(items, era=era)
+                if verdicts is None:
+                    for i in to_audit:
+                        entries[i].update(audit="unaudited", reason="Visión no disponible (fail-closed)")
+                    break
+                for i, (approved, reason, issues) in verdicts.items():
+                    entries[i].update(audit="approved" if approved else "rejected", reason=reason, issues=issues)
+                    if not approved:
+                        retry.add(i)
+        to_audit = set()
+
+        # Solo se re-intentan escenas cuya cascada aún tiene candidatos
+        to_fetch = sorted(i for i in retry if i not in states or states[i]["pos"] < len(states[i]["plan"]))
+        if not to_fetch:
+            break
+
+    manifest = {"topic": topic, "aspect_ratio": aspect_ratio, "scenes": {str(i): e for i, e in entries.items()}}
+    save_manifest(target_dir, manifest)
+
+    image_paths = [paths[i] for i in range(1, total + 1)]
+    statuses = [e["audit"] for e in entries.values()]
+    logger.info(
+        "Imágenes listas: {} aprobadas, {} sin aprobar ({}).",
+        statuses.count("approved") + statuses.count("disabled"),
+        total - statuses.count("approved") - statuses.count("disabled"),
+        ", ".join(f"#{i}:{e['audit']}" for i, e in sorted(entries.items()) if e["audit"] not in ("approved", "disabled")) or "ninguna",
+    )
     return image_paths
-

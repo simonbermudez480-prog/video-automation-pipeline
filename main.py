@@ -37,6 +37,7 @@ from src.script_generator import generate_script, save_script_to_disk, ScriptOut
 from src.voice_synthesizer import synthesize_voice
 from src.audio_processor import process_audio_and_align
 from src.image_generator import generate_images_for_scenes
+from src.quality_gate import MANIFEST_NAME, run_quality_gate
 from src.video_assembler import assemble_video
 from src.youtube_uploader import upload_video_to_youtube
 from src.social_copywriter import generate_social_copy, SocialBundle
@@ -243,7 +244,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             aspect_ratio=aspect_ratio,
             visual_contract=getattr(script_data, "visual_contract", None),
         )
-        for img in image_paths:
+        for img in image_paths + [job_images_dir / MANIFEST_NAME]:
             try:
                 shutil.copy2(img, settings.IMAGES_DIR / img.name)
             except Exception:
@@ -292,6 +293,33 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
         platforms_to_publish = ["youtube"]
 
     create_social_pack = not getattr(args, "no_social_pack", False)
+
+    # Control de calidad visual previo a publicar (FR-12): bloquea la publicación automática si falla
+    if platforms_to_publish and image_paths:
+        contact_sheet = OUTPUT_DIR / "review" / f"{final_video.stem}_contact.png"
+        gate = run_quality_gate(image_paths, contact_sheet)
+        quality_report = {
+            "status": "passed" if gate.passed else "needs_review",
+            "reasons": gate.reasons,
+            "failing_scenes": sorted(gate.failing_scenes),
+            "contact_sheet": str(contact_sheet),
+        }
+        approved = gate.passed and not args.require_approval
+        if args.require_approval:
+            if sys.stdin and sys.stdin.isatty():
+                answer = input(
+                    f"\nRevisa la hoja de contacto: {contact_sheet}\n"
+                    f"Control de calidad: {'SUPERADO' if gate.passed else 'FALLIDO'}. ¿Publicar en {', '.join(platforms_to_publish)}? [s/N]: "
+                )
+                approved = answer.strip().lower() in ("s", "si", "sí", "y", "yes")
+                quality_report["human_decision"] = "approved" if approved else "rejected"
+            else:
+                logger.warning("Se requiere aprobación humana y no hay terminal interactiva (usa --no-approval para omitirla).")
+        if not approved:
+            logger.error("Publicación BLOQUEADA: el video queda marcado 'needs_review'. Solo se genera el paquete local.")
+            quality_report["status"] = "needs_review"
+            platforms_to_publish = []
+        (job_dir / "quality_report.json").write_text(json.dumps(quality_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if final_video.exists() and (create_social_pack or platforms_to_publish):
         logger.info(
@@ -516,6 +544,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["youtube", "instagram", "tiktok", "all"],
         default=None,
         help="Especificar redes para publicación (ej: --publish-platforms youtube instagram)",
+    )
+    parser.add_argument(
+        "--no-approval",
+        dest="require_approval",
+        action="store_false",
+        help="Publicar sin confirmación humana si el control de calidad visual se supera (por defecto se pide confirmación)",
     )
     parser.add_argument(
         "--no-social-pack",

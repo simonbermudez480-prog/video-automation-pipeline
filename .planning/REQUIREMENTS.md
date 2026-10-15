@@ -78,5 +78,28 @@
   - Soporte de Pexels API para fotografía y video de stock documental contextual.
   - Filtrado inteligente de Picsum Photos mediante auditoría de Gemini Vision para descartar fotos aleatorias desconectadas.
   - Fallback procedural cinemático si las fuentes externas no satisfacen los criterios de calidad.
+  - **[SUPERSEDED por FR-12/FR-13]** — Auditoría 2026-10-15: Picsum, el Guardián de Metadatos y el fallback procedural son la causa principal de imágenes incoherentes (ver Contexto en FR-12).
+
+### FR-12: Pre-Publish Quality Gate (Fase 15)
+**Contexto (auditoría 2026-10-15, video "La Guerra del Emú"):** escenas 1–2 (gancho, ~21 s) salieron como degradado procedural; escenas 6 y 10 idénticas (mismo MD5); escena 5 soldado moderno anacrónico; escena 12 perro en playa. Log: 298× Pollinations HTTP 402, cuota Gemini Vision agotada a mitad del lote → 89 aprobaciones solo por metadatos vs 18 por visión, 39 fondos procedurales.
+
+- **FR-12.1 Bloqueo de publicación:** El video NO se envía a Buffer/YouTube si: (a) alguna de las escenas 1–3 es un fallback procedural; (b) más de 1 escena total es procedural; (c) existen imágenes duplicadas (hash idéntico o perceptual hash con distancia ≤ 5). El job queda marcado `needs_review` con motivo en el log y en el manifiesto.
+- **FR-12.2 Eliminación de fuentes incoherentes:** Se retiran Picsum (`_fetch_from_picsum_verified`) y la aprobación de Pexels solo por metadatos (`alt`). Una imagen sin auditoría visual real no se aprueba.
+- **FR-12.3 Auditoría por lote:** La auditoría de Gemini Vision se hace con una sola llamada por video (hoja de contacto numerada con todas las escenas + narración por escena), que devuelve un veredicto JSON por escena. Se re-auditan solo las escenas regeneradas. Objetivo: ≤ 3 llamadas de visión por video.
+- **FR-12.4 Aprobación humana opcional:** Flag `--require-approval` (por defecto activo cuando se publica): genera `output/review/<slug>_contact.png` y pausa antes de publicar hasta confirmación explícita.
+- **FR-12.5 Correcciones de bugs:** `shot_type` por defecto `"macro_detail"` (hoy `"detail_macro"` no coincide con ninguna rama); semilla del tema con hash estable (`hashlib`) en vez de `hash()`; la caché de imágenes se invalida también si cambia el `visual_prompt` de la escena (firma por escena, no solo por tema).
+- **Criterio de aceptación:** Re-ejecutar el tema "La Guerra del Emú" en modo `--dry-run` produce 0 procedurales en escenas 1–3, 0 duplicados, y si alguna condición falla el pipeline se detiene antes de publicar.
+
+### FR-13: Free Hybrid Visual Pipeline — Archivo + Gradación Uniforme + IA gratuita (Fase 16)
+**Decisión (2026-10-15, revisada):** Restricción dura: **costo USD 0 por video**. Se descarta la IA con referencias de pago (opción 1) y la generación local (equipo sin GPU dedicada: i3-1115G4, 12 GB RAM, Intel UHD). La coherencia se logra en postproducción, no en el generador.
+
+- **FR-13.1 Fuente principal = archivo real gratuito:** Wikimedia Commons y Library of Congress (dominio público) priorizados para temas históricos; Pexels como complemento. Búsqueda filtrada por época/tema y con la auditoría visual de FR-12.3 (nada se aprueba sin verse).
+- **FR-13.2 Gradación uniforme obligatoria:** Toda imagen, venga de donde venga, pasa por el mismo tratamiento en FFmpeg/Pillow definido por video (curva de color o look monocromo/sepia según la época, grano, viñeta). El look se deriva del `VisualContract`.
+- **FR-13.3 Encuadre vertical sin recortes destructivos:** Las fotos horizontales se colocan en 9:16 sobre un fondo de la misma imagen desenfocado, en vez de recortar el centro.
+- **FR-13.4 IA gratuita solo para huecos:** Si ninguna foto de archivo supera la auditoría, se intenta un proveedor de IA de costo cero (candidatos a validar en el spike: Pollinations con token gratuito registrado, cuota diaria gratuita de Cloudflare Workers AI, cuota gratuita de imágenes de Gemini si la clave la tiene). La imagen generada pasa por la misma gradación.
+- **FR-13.5 Garantía de costo cero:** Ningún proveedor que requiera facturación se llama por defecto. El spike verifica que la clave de Gemini no tenga facturación activa (o que las llamadas usadas estén dentro del tier gratuito).
+- **FR-13.6 Personajes:** Para personas históricas se usan fotos/retratos reales de archivo; no se generan rostros con IA. `character_anchor` se usa como término de búsqueda de archivo.
+- **FR-13.7 Sin degradados silenciosos:** Si una escena no consigue imagen válida tras archivo + IA gratuita, aplica FR-12.1 (bloqueo / revisión).
+- **Criterio de aceptación:** Hoja de contacto del video de prueba revisada visualmente: mismo look en todas las escenas, 0 anacronismos evidentes, 0 marcas de agua, 0 duplicados, 0 degradados; costo registrado USD 0.
 
 

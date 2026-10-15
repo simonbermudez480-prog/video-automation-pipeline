@@ -49,7 +49,7 @@ class Scene(BaseModel):
     scene_id: int = Field(description="Número de escena secuencial (1, 2, 3...)")
     narration_text: str = Field(description="Texto exacto a ser narrado para esta escena (1 a 2 oraciones, 20 a 35 palabras)")
     shot_type: Optional[str] = Field(
-        default="detail_macro",
+        default="macro_detail",
         description="Tipo de plano cinemático: 'macro_detail' (manos, notas, objetos clave), 'over_the_shoulder', 'silhouette_backlight', 'environmental_wide', 'dramatic_close_up', 'medium_action'"
     )
     visual_prompt: str = Field(

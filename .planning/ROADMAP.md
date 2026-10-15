@@ -73,4 +73,20 @@
   - **Búsqueda Escalonada en Pexels API**: Derivación automática de términos primarios y simplificados en orientación vertical con adaptación inteligente vía Pillow Lanczos, garantizando fotografías históricas auténticas y coherentes.
   - **Validación End-to-End**: Producción exitosa del documental 'La historia del fundador de Louis Vuitton' (13 escenas) con 100% de imágenes contextuales reales de archivo, subido y publicado automáticamente a YouTube Shorts, Instagram Reels y TikTok.
 
+> Nota: las fases 13 y 14 (batch vertical y publicación vía Buffer) figuran como completas en `STATE.md` pero no se registraron aquí.
 
+- [x] **Phase 15: Pre-Publish Quality Gate** (Requisitos: FR-12) — *Fase A de la auditoría 2026-10-15*
+  - [x] 15.1 Corregir bugs: `shot_type` por defecto `macro_detail`, semilla con `hashlib`, firma de caché por escena (FR-12.5).
+  - [x] 15.2 Retirar Picsum y la aprobación de Pexels solo por metadatos (FR-12.2).
+  - [x] 15.3 Auditoría de visión por lote con hoja de contacto: 1 llamada por video, veredicto JSON por escena (FR-12.3).
+  - [x] 15.4 Bloqueo de publicación: procedural en escenas 1–3, >1 procedural, duplicados por hash/pHash → `needs_review` (FR-12.1).
+  - [x] 15.5 Flag `--require-approval` con hoja de contacto en `output/review/` (FR-12.4).
+  - [x] 15.6 Verificado (2026-10-15): (a) gate sin API sobre las imágenes publicadas del Emú → detecta degradados en escenas 1–2 y duplicado 10=6 (falso positivo de cielo liso corregido con comparación de color); (b) regeneración real del guion del Emú en carpeta temporal → 4 llamadas de visión en total (1 por ronda), 0 degradados, 0 duplicados, 4/13 aprobadas, publicación bloqueada correctamente. `--dry-run` no sirve para esto (sale antes de generar), por eso se usó una carpeta temporal.
+
+- [ ] **Phase 16: Free Hybrid Visual Pipeline** (Requisitos: FR-13) — *Fase B, enfoque híbrido gratuito elegido 2026-10-15 (costo USD 0)*
+  - [ ] 16.1 Spike gratuito: confirmar que la clave Gemini no tiene facturación activa; probar Pollinations con token gratuito, Cloudflare Workers AI (cuota free) y cuota free de imágenes Gemini. Elegir proveedor de huecos.
+  - [ ] 16.2 Mejorar búsqueda de archivo: Wikimedia + Library of Congress con filtro por época, varias candidatas por escena, auditoría por lote (FR-13.1).
+  - [ ] 16.3 Encuadre vertical con fondo desenfocado para fotos horizontales (FR-13.3).
+  - [ ] 16.4 Gradación uniforme por video derivada del `VisualContract` (FR-13.2).
+  - [ ] 16.5 IA gratuita solo para huecos con la misma gradación (FR-13.4, FR-13.5).
+  - [ ] 16.6 Verificar: producir video de prueba sin publicar, revisar hoja de contacto completa y comparar contra la del Emú.
