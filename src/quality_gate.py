@@ -24,7 +24,6 @@ MANIFEST_NAME = "image_manifest.json"
 DUPLICATE_MAX_DISTANCE = 5
 DUPLICATE_MAX_COLOR_DIFF = 12  # diferencia media por canal (0-255) en miniatura 16x16
 AUDIT_BATCH_SIZE = 16
-QA_ISSUES = ("UNWANTED_HUMAN", "WATERMARK_OR_TEXT", "ABSURD_DISSONANCE", "ANACHRONISM")
 
 _VISION_LOCK = threading.Lock()
 _LAST_VISION_CALL = 0.0
@@ -95,29 +94,51 @@ def find_duplicates(image_paths: dict[int, Path]) -> dict[int, int]:
 # Auditoría por lote con Gemini Vision
 # ---------------------------------------------------------------------------
 
-def _build_batch_prompt(items: list[dict], era: str) -> str:
+SOURCE_KINDS = {
+    "wikimedia_topic": "archive", "wikimedia_scene": "archive", "nasa": "archive",
+    "pexels": "stock",
+    "fal": "ai", "imagen": "ai", "pollinations": "ai",
+}
+
+
+def _build_batch_prompt(items: list[dict], era: str, topic: str = "") -> str:
     lines = [
-        "You are an uncompromising QA inspector for a historical/educational documentary video.",
-        f"Global era/setting of the video: \"{era or 'unspecified'}\".",
+        "You are a rigorous QA inspector for a historical/educational documentary video.",
+        f"Video topic: \"{topic or 'unspecified'}\". Global era/setting: \"{era or 'unspecified'}\".",
         "You will receive several candidate images, each preceded by its label 'IMAGE <n>'.",
-        "For each image, check its own scene context below and evaluate 4 disqualifiers:",
-        "1. UNWANTED_HUMAN: accidental, modern or out-of-context people (any human is forbidden in environmental_wide or macro_detail shots).",
-        "2. WATERMARK_OR_TEXT: visible watermarks, stock logos, URLs, subtitles or modern branding.",
-        "3. ABSURD_DISSONANCE: the image does not tangibly or atmospherically depict the scene (e.g. pets, houseplants, beaches, modern cities for a historical battle).",
-        "4. ANACHRONISM: clothing, weapons, vehicles or objects clearly from a different era than the scene.",
+        "Each image has a SOURCE type. Apply the rules for its source:",
+        "",
+        "ARCHIVE (a real historical photograph or document from a public archive):",
+        "- Judge it against the NARRATION and the historical event/topic, NOT against the exact camera framing of the intended subject.",
+        "- Approve it if it plausibly shows the event, its place, its people, its objects or its era. A related photo of the same event is acceptable even if it shows a different moment.",
+        "- People from the period are expected and fine. Black-and-white, grain, low resolution or old damage are fine.",
+        "- Reject: photos from a clearly different era, country or conflict (ANACHRONISM); unrelated subjects (ABSURD_DISSONANCE);",
+        "  collages, multi-panel montages, memes or modern graphics (COLLAGE); maps or text documents when the narration describes an action (ABSURD_DISSONANCE);",
+        "  watermarks or overlaid modern text (WATERMARK_OR_TEXT).",
+        "",
+        "STOCK (a contemporary stock photo):",
+        "- Only acceptable for timeless subjects that fit the narration: landscapes, nature, animals, generic old objects.",
+        "- Reject any modern element: modern people, clothing, vehicles, weapons, equipment or buildings (ANACHRONISM);",
+        "  people when the scene does not call for them (UNWANTED_HUMAN); unrelated subjects (ABSURD_DISSONANCE); watermarks (WATERMARK_OR_TEXT).",
+        "",
+        "AI (an AI-generated image): apply strict rules.",
+        "- It must depict the intended subject. Any human is forbidden in environmental_wide or macro_detail shots (UNWANTED_HUMAN).",
+        "- Reject anachronisms, unrelated subjects, distorted anatomy or faces, watermarks or text.",
         "",
         "Scene contexts:",
     ]
     for it in items:
+        source = it.get("source_kind") or "unknown"
+        title = f"; archive title=\"{it['source_title']}\"" if it.get("source_title") else ""
         lines.append(
-            f"- IMAGE {it['idx']}: shot_type='{it.get('shot_type') or 'unspecified'}'; "
+            f"- IMAGE {it['idx']}: SOURCE={source.upper()}{title}; shot_type='{it.get('shot_type') or 'unspecified'}'; "
             f"narration (Spanish)=\"{it.get('narration', '')}\"; intended subject=\"{it.get('prompt', '')[:300]}\""
         )
     lines += [
         "",
         "Output strictly JSON with one verdict per image:",
         '{"verdicts": [{"scene": <n>, "approved": true|false, "reason": "brief explanation in Spanish", '
-        '"detected_issues": ["UNWANTED_HUMAN"|"WATERMARK_OR_TEXT"|"ABSURD_DISSONANCE"|"ANACHRONISM"]}]}',
+        '"detected_issues": ["UNWANTED_HUMAN"|"WATERMARK_OR_TEXT"|"ABSURD_DISSONANCE"|"ANACHRONISM"|"COLLAGE"]}]}',
     ]
     return "\n".join(lines)
 
@@ -234,10 +255,11 @@ def _call_vision(contents: list) -> Optional[dict]:
     return None
 
 
-def audit_images_batch(items: list[dict], era: str = "") -> Optional[dict[int, tuple[bool, str, list[str]]]]:
+def audit_images_batch(items: list[dict], era: str = "", topic: str = "") -> Optional[dict[int, tuple[bool, str, list[str]]]]:
     """
     Audita varias escenas con UNA llamada de visión por lote (máx. AUDIT_BATCH_SIZE imágenes).
-    items: [{"idx": int, "path": Path, "narration": str, "prompt": str, "shot_type": str}]
+    items: [{"idx": int, "path": Path, "narration": str, "prompt": str, "shot_type": str,
+             "source_kind": "archive"|"stock"|"ai", "source_title": str}]
     Retorna {idx: (aprobada, motivo, problemas)} o None si la visión no está disponible (fail-closed).
     """
     if not items:
@@ -249,7 +271,7 @@ def audit_images_batch(items: list[dict], era: str = "") -> Optional[dict[int, t
     results: dict[int, tuple[bool, str, list[str]]] = {}
     for start in range(0, len(items), AUDIT_BATCH_SIZE):
         batch = items[start:start + AUDIT_BATCH_SIZE]
-        contents: list = [_build_batch_prompt(batch, era)]
+        contents: list = [_build_batch_prompt(batch, era, topic)]
         for it in batch:
             with Image.open(it["path"]) as im:
                 thumb = im.convert("RGB")

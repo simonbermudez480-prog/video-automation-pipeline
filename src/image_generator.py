@@ -24,7 +24,7 @@ import requests
 
 from src.config import settings
 from src.logger import logger
-from src.quality_gate import audit_images_batch, find_duplicates, load_manifest, save_manifest
+from src.quality_gate import SOURCE_KINDS, audit_images_batch, find_duplicates, load_manifest, save_manifest
 from src.script_generator import Scene
 
 # Encabezados estándar de navegador para evitar bloqueos
@@ -682,6 +682,7 @@ def generate_images_for_scenes(
     workers = getattr(settings, "CONCURRENT_IMAGE_WORKERS", 4)
     qa_enabled = getattr(settings, "ENABLE_IMAGE_QA_GATEKEEPER", True)
     era = getattr(visual_contract, "era_setting", "") if visual_contract else ""
+    topic_label = (getattr(visual_contract, "archive_search_terms", None) or topic or "") if visual_contract else (topic or "")
     logger.info("Iniciando obtención de {} imágenes (Workers: {}, Formato: {}, Tema: '{}')...", total, workers, aspect_ratio, topic or "General")
 
     manifest = load_manifest(target_dir)
@@ -765,10 +766,12 @@ def generate_images_for_scenes(
             else:
                 items = [
                     {"idx": i, "path": paths[i], "narration": scenes[i - 1].narration_text,
-                     "prompt": scenes[i - 1].visual_prompt, "shot_type": scenes[i - 1].shot_type}
+                     "prompt": scenes[i - 1].visual_prompt, "shot_type": scenes[i - 1].shot_type,
+                     "source_kind": SOURCE_KINDS.get(entries[i].get("source") or "", "unknown"),
+                     "source_title": (entries[i].get("credit") or {}).get("title", "") if SOURCE_KINDS.get(entries[i].get("source") or "") == "archive" else ""}
                     for i in sorted(to_audit)
                 ]
-                verdicts = audit_images_batch(items, era=era)
+                verdicts = audit_images_batch(items, era=era, topic=topic_label)
                 if verdicts is None:
                     # Sin visión no se audita más, pero se siguen reemplazando duplicados
                     vision_down = True
