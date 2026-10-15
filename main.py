@@ -95,16 +95,11 @@ def extract_topics(args: argparse.Namespace) -> List[str]:
         else:
             logger.warning("El archivo de temas especificado no existe: {}", t_file)
 
-    # 2. Leer desde argumento --topic (lista de cadenas o separadas por comas)
+    # 2. Leer desde argumento --topic: cada valor es un tema completo (puede contener comas, ej. "Poyais, 1822")
     if getattr(args, "topic", None):
         topic_arg = args.topic
-        if isinstance(topic_arg, list):
-            for item in topic_arg:
-                parts = [p.strip() for p in item.split(",") if p.strip()]
-                raw_topics.extend(parts)
-        elif isinstance(topic_arg, str):
-            parts = [p.strip() for p in topic_arg.split(",") if p.strip()]
-            raw_topics.extend(parts)
+        items = topic_arg if isinstance(topic_arg, list) else [topic_arg]
+        raw_topics.extend(t.strip() for t in items if t and t.strip())
 
     # 3. Eliminar duplicados manteniendo orden de inserción
     unique_topics = []
@@ -500,7 +495,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         type=str,
         default=["La teoria de la muerte y el multiverso"],
-        help="Uno o varios temas para generar videos (ej: --topic 'Tema 1' 'Tema 2' o 'Tema 1, Tema 2')",
+        help="Uno o varios temas para generar videos; cada valor es un tema completo y puede llevar comas (ej: --topic 'Tema 1' 'Tema 2, 1822')",
     )
     parser.add_argument(
         "--topics-file",

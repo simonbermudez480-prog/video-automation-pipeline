@@ -18,6 +18,12 @@
 - Lección: verificar la hoja de contacto completa de todas las escenas, no frames sueltos.
 
 ## Completed (history)
+  - Publicación de "El hombre que vendió un país que no existía (Gregor MacGregor y Poyais, 1822)" (2026-10-15): `output/el_hombre_que_vendio_un_pais_que_no_9x16_20261015_093538.mp4` (153,08 s; control superado con 11/13 + fusiones 4→3 y 6→5; look archival). Vía Buffer:
+    - YouTube: https://www.youtube.com/watch?v=BvL8hf-yAS8 (Post ID `6ad0e052109a34529aa1d6e0`)
+    - Instagram Reels: https://www.instagram.com/reel/DehJyJaDk-C/ (Post ID `6ad0e056a0df5987c75e40ed`)
+    - TikTok: https://tiktok.com/@historiaycultura2411/video/7696898485110558004 (Post ID `6ad0e06110fd2689b3e5592c`)
+    - Publicado tal como estaba por decisión del usuario: la escena 11 (cartel "WANTED" de IA) tiene texto inventado y mal escrito que el revisor aprobó. Sin créditos: 2 imágenes CC BY-SA 4.0 / CC BY 4.0.
+    - Fallo detectado: `extract_topics` separa `--topic` por comas, así que "…Poyais, 1822)" generó un segundo video basura ("1822)"); se borró sin publicar.
   - Publicación de "La explosión de Chernóbil (1986)" (2026-10-15), primer video con las fases 15–17: `output/la_explosion_de_chernobil_1986_9x16_v2.mp4` (126,04 s; control superado con 11/13 imágenes + 2 fusiones). Publicado vía Buffer:
     - YouTube: https://www.youtube.com/watch?v=EuJT_8RnMcg (Post ID `6ad08ae75ca32ad3c7eca0e7`)
     - Instagram Reels: https://www.instagram.com/reel/DeggFAWiqQJ/ (Post ID `6ad08aeb6295ecc932f5390c`)

@@ -109,7 +109,8 @@ def _build_batch_prompt(items: list[dict], era: str, topic: str = "") -> str:
         "You will receive several candidate images, each preceded by its label 'IMAGE <n>'.",
         "Each image has a SOURCE type. Apply the rules for its source:",
         "",
-        "ARCHIVE (a real historical photograph or document from a public archive):",
+        "ARCHIVE (real historical material from a public archive: photographs, and also period paintings, portraits,",
+        "  engravings, maps, banknotes and documents; before the 1840s there is no photography, so these are the expected archive material):",
         "- Judge it against the NARRATION and the historical event/topic, NOT against the exact camera framing of the intended subject.",
         "- Approve it if it plausibly shows the event, its place, its people, its objects or its era. A related photo of the same event is acceptable even if it shows a different moment.",
         "- People from the period are expected and fine. Black-and-white, grain, low resolution or old damage are fine.",
@@ -120,17 +121,24 @@ def _build_batch_prompt(items: list[dict], era: str, topic: str = "") -> str:
         "STOCK (a contemporary stock photo):",
         "- Only acceptable for timeless subjects that fit the narration: landscapes, nature, animals, generic old objects.",
         "- Reject any modern element: modern people, clothing, vehicles, weapons, equipment or buildings (ANACHRONISM);",
-        "  people when the scene does not call for them (UNWANTED_HUMAN); unrelated subjects (ABSURD_DISSONANCE); watermarks (WATERMARK_OR_TEXT).",
+        "  people when the scene does not call for them (UNWANTED_HUMAN); unrelated subjects (ABSURD_DISSONANCE); watermarks (WATERMARK_OR_TEXT);",
+        "  visible text that is gibberish, invented or misspelled (WATERMARK_OR_TEXT).",
         "",
         "AI (an AI-generated image): apply strict rules.",
         "- It must depict the intended subject. Any human is forbidden in environmental_wide or macro_detail shots (UNWANTED_HUMAN).",
         "- Reject anachronisms, unrelated subjects, distorted anatomy or faces, watermarks or text.",
+        "- Read any visible lettering (signs, posters, documents, labels, coins): if it is gibberish, invented words or misspelled names,",
+        "  reject it (WATERMARK_OR_TEXT) even if the rest of the image fits the scene.",
         "",
         "Scene contexts:",
     ]
     for it in items:
         source = it.get("source_kind") or "unknown"
         title = f"; archive title=\"{it['source_title']}\"" if it.get("source_title") else ""
+        if source == "archive":
+            # El "sujeto previsto" describe un encuadre pensado para IA; para archivo solo cuentan narración y hecho
+            lines.append(f"- IMAGE {it['idx']}: SOURCE=ARCHIVE{title}; narration (Spanish)=\"{it.get('narration', '')}\"")
+            continue
         lines.append(
             f"- IMAGE {it['idx']}: SOURCE={source.upper()}{title}; shot_type='{it.get('shot_type') or 'unspecified'}'; "
             f"narration (Spanish)=\"{it.get('narration', '')}\"; intended subject=\"{it.get('prompt', '')[:300]}\""
