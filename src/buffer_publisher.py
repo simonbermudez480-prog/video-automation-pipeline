@@ -8,6 +8,7 @@ Permite publicar simultáneamente videos verticales (Shorts, Reels, TikTok) en:
 El usuario solo provee su BUFFER_ACCESS_TOKEN y este módulo descubre automáticamente
 los canales conectados y ejecuta las publicaciones con sus metadatos específicos.
 """
+import os
 from pathlib import Path
 import time
 from typing import Dict, List, Optional
@@ -68,12 +69,54 @@ def _is_readable_video(path: Path) -> bool:
     return probe.returncode == 0 and bool(probe.stdout.strip())
 
 
+def _cdn_repo() -> str:
+    return os.getenv("GITHUB_CDN_REPO", "") or "simonbermudez480-prog/video-assets"
+
+
+def _upload_to_github_api(target_path: Path, token: str) -> Optional[str]:
+    """
+    Sube el video al repo de alojamiento con la API de contenidos de GitHub y un token limitado a ese repo
+    (GITHUB_CDN_TOKEN). No necesita 'gh' ni una copia local del repo.
+    """
+    import base64
+    repo = _cdn_repo()
+    dest_filename = f"{target_path.stem}.mp4"
+    api_url = f"https://api.github.com/repos/{repo}/contents/{dest_filename}"
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    try:
+        payload = {
+            "message": f"Upload {dest_filename} for Buffer delivery",
+            "content": base64.b64encode(target_path.read_bytes()).decode("ascii"),
+            "branch": "main",
+        }
+        existing = requests.get(api_url, headers=headers, params={"ref": "main"}, timeout=30)
+        if existing.status_code == 200:
+            payload["sha"] = existing.json().get("sha")
+        resp = requests.put(api_url, headers=headers, json=payload, timeout=300)
+        if resp.status_code not in (200, 201):
+            logger.warning("GitHub API rechazó la subida (HTTP {}): {}", resp.status_code, resp.text[:200])
+            return None
+        direct_url = f"https://raw.githubusercontent.com/{repo}/main/{dest_filename}"
+        for _ in range(12):  # el archivo tarda unos segundos en estar disponible en raw.githubusercontent.com
+            if requests.head(direct_url, timeout=20).status_code == 200:
+                break
+            time.sleep(5)
+        logger.success("Video hosteado en GitHub (API con token) para Buffer: {}", direct_url)
+        return direct_url
+    except Exception as e:
+        logger.warning("Fallo al subir con la API de GitHub: {}", e)
+        return None
+
+
 def _upload_to_github_cdn(target_path: Path) -> Optional[str]:
     """
-    Sube el video al repositorio público 'video-assets' de GitHub usando 'gh' CLI
-    para obtener una URL directa de raw.githubusercontent.com con CDN global de alta velocidad,
-    la cual es aceptada por Buffer al 100% sin bloqueos de raspadores ni caídas de servidores temporales.
+    Sube el video al repositorio público de alojamiento (por defecto 'video-assets') para obtener una URL directa
+    de raw.githubusercontent.com, que Buffer acepta sin bloqueos. Con GITHUB_CDN_TOKEN usa la API de GitHub;
+    si no, usa 'gh' CLI con la sesión iniciada y un clon local del repo.
     """
+    token = os.getenv("GITHUB_CDN_TOKEN", "")
+    if token:
+        return _upload_to_github_api(target_path, token)
     try:
         import shutil
         gh_path = shutil.which("gh")
@@ -83,7 +126,7 @@ def _upload_to_github_cdn(target_path: Path) -> Optional[str]:
         cdn_dir = settings.TEMP_DIR / "video_assets_cdn"
         if not cdn_dir.exists():
             res_clone = subprocess.run(
-                ["gh", "repo", "clone", "simonbermudez480-prog/video-assets", str(cdn_dir)],
+                ["gh", "repo", "clone", _cdn_repo(), str(cdn_dir)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
@@ -102,7 +145,7 @@ def _upload_to_github_cdn(target_path: Path) -> Optional[str]:
         push_res = subprocess.run(["git", "-C", str(cdn_dir), "push", "origin", "main"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         if push_res.returncode == 0:
-            direct_url = f"https://raw.githubusercontent.com/simonbermudez480-prog/video-assets/main/{dest_filename}"
+            direct_url = f"https://raw.githubusercontent.com/{_cdn_repo()}/main/{dest_filename}"
             logger.success("Video hosteado en GitHub CDN para Buffer: {}", direct_url)
             return direct_url
     except Exception as e:

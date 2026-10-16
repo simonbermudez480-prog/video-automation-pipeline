@@ -2,7 +2,7 @@
 
 ## Status
 - **Current Phase:** Phase 15 (Pre-Publish Quality Gate) — Complete (sin commit). Phase 16 (Free Hybrid Visual Pipeline) — siguiente.
-- **Active Task:** Fase 18 (interfaz de escritorio) terminada y verificada, sin commit. Se abre con `Abrir_Videos_Educativos.bat`.
+- **Active Task:** Fase 19 terminada y verificada (sin commit). Paquete en `dist\VideosEducativos_Instalador.exe` con `.env` completo (incluye `GITHUB_CDN_TOKEN` fine-grained limitado a `video-assets`). Se regenera con `empaquetar.bat`.
 - **Fase 15 — resultado clave:** con el control activo, las fuentes gratuitas actuales (Pexels/Wikimedia con búsqueda simple) solo consiguen 4/13 imágenes válidas para el Emú (1932): casi todo el stock es moderno. El bloqueo funciona; lo que falta es mejor búsqueda de archivo (Fase 16). Nuevo módulo `src/quality_gate.py`; publicar ahora pide confirmación humana por defecto (`--no-approval` para automatizar) y deja `quality_report.json` en la carpeta del job y la hoja de contacto en `output/review/`.
 - **Riesgo:** la cuota gratuita de visión por modelo es pequeña (2 modelos se agotaron en 4 llamadas el 2026-10-15). Si se agota, las escenas quedan `unaudited` y la publicación se bloquea.
 - **Next Actions:**

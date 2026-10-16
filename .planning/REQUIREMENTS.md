@@ -124,3 +124,13 @@
 - **FR-15.4 Cola y estado:** trabajos en la cola diferida con botón "Procesar cola"; saldo de Pollen y espacio libre en disco, con aviso si queda poco.
 - **FR-15.5 Soporte en main.py:** `quality_report.json` se escribe siempre (no solo al publicar); nueva opción `--publish-job CARPETA` para publicar un video ya producido; `publish_social` devuelve el resultado y se guarda en `publication.json` del trabajo.
 - **Criterio de aceptación:** capturas reales de las 4 pestañas revisadas visualmente (legibilidad y contraste); flujo crear → revisar → publicar probado con publicación simulada; el lanzador abre la ventana sin consola de comandos.
+
+### FR-16: Paquete portátil para otra PC (Fase 19)
+**Decisión (2026-10-15):** un único archivo autoextraíble cifrado con contraseña (7-Zip, AES-256) con el código, la interfaz, el instalador, la guía y el `.env` completo (mismas claves). Nada de esto pasa por GitHub (el repo es público).
+
+- **FR-16.1 Subida sin sesión de GitHub:** el video para Buffer se sube a `video-assets` con la API de contenidos de GitHub usando `GITHUB_CDN_TOKEN` (token fine-grained con permiso solo sobre ese repo) y `GITHUB_CDN_REPO`. Si no hay token, se usa el método anterior (`gh` + clon local).
+- **FR-16.2 Instalador de doble clic (`instalar.bat`):** instala Python 3.12 si falta (por usuario, con Tkinter), crea `.venv` con las librerías, descarga FFmpeg en `toolsfmpeg`, crea `.env` desde el ejemplo si falta, hace una prueba de arranque y crea un acceso directo en el escritorio. Mensajes en español.
+- **FR-16.3 Lanzador portable:** `Abrir_Videos_Educativos.bat` usa `.venv` y `toolsfmpeg` si existen.
+- **FR-16.4 Diagnóstico en la interfaz:** la pestaña "Cola y estado" indica en verde/rojo FFmpeg, claves de Gemini, Buffer, Pollinations, Pexels y token de GitHub.
+- **FR-16.5 Empaquetador (`empaquetar.bat`):** genera el autoextraíble con contraseña a partir de los archivos versionados + `.env`, sin videos, trabajos ni backups.
+- **Criterio de aceptación:** el paquete se extrae en una carpeta limpia, el instalador termina sin errores, la interfaz abre desde el acceso directo y `--dry-run` funciona; subida de prueba a `video-assets` con el token.

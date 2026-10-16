@@ -37,3 +37,7 @@ logs/
 
 # Backups locales
 backups/
+
+# Paquete portátil (Fase 19)
+tools/
+dist/

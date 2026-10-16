@@ -80,6 +80,29 @@ def load_queue() -> list[dict]:
     return [{"file": p, **_read_json(p)} for p in sorted(QUEUE_DIR.glob("*.json"))]
 
 
+def run_diagnostics() -> list[tuple[str, bool, bool, str]]:
+    """Comprueba lo necesario para funcionar: (nombre, correcto, obligatorio, qué hacer si falta)."""
+    from dotenv import dotenv_values
+    env_path = ROOT / ".env"
+    env = dotenv_values(env_path) if env_path.exists() else {}
+
+    def has(key: str) -> bool:
+        value = (env.get(key) or "").strip()
+        return bool(value) and not value.startswith("tu_")
+
+    return [
+        ("FFmpeg (montaje de video)", bool(shutil.which("ffmpeg")), True, "Vuelve a ejecutar instalar.bat."),
+        ("Archivo de claves (.env)", env_path.exists(), True, "Copia el archivo .env en la carpeta del programa."),
+        ("Clave de Gemini (guion, voz y revisión)", has("GEMINI_API_KEY"), True, "Falta GEMINI_API_KEY en el archivo .env."),
+        ("Token de Buffer (publicar)", has("BUFFER_ACCESS_TOKEN"), True, "Falta BUFFER_ACCESS_TOKEN en el archivo .env."),
+        ("Subida del video a GitHub (para Buffer)", has("GITHUB_CDN_TOKEN") or bool(shutil.which("gh")), True,
+         "Falta GITHUB_CDN_TOKEN en el archivo .env (ver INSTALACION.md)."),
+        ("Clave de Pollinations (imágenes con IA)", has("POLLINATIONS_API_KEY") or has("IMAGE_API_KEY"), False,
+         "Opcional: sin ella no se generan imágenes con IA para los huecos."),
+        ("Clave de Pexels (fotos de stock)", has("PEXELS_API_KEY"), False, "Opcional: sin ella no se usan fotos de stock."),
+    ]
+
+
 def free_disk_gb() -> float:
     return shutil.disk_usage(ROOT).free / 1024 ** 3
 
@@ -513,6 +536,8 @@ class App(tk.Tk):
         self.pollen_label = tk.Label(row, text="Saldo de imágenes IA (Pollinations): —", font=("Segoe UI", 12), bg=COLORS["card"], fg=COLORS["text"])
         self.pollen_label.pack(side="left")
         ttk.Button(row, text="Consultar saldo", command=self._refresh_pollen).pack(side="left", padx=12)
+        self.diag_frame = ttk.Frame(card, style="Card.TFrame")
+        self.diag_frame.pack(anchor="w", fill="x", pady=(10, 0))
 
         ttk.Separator(card).pack(fill="x", pady=16)
         top = ttk.Frame(card, style="Card.TFrame")
@@ -537,6 +562,12 @@ class App(tk.Tk):
             text=f"Espacio libre en disco: {free:.1f} GB" + ("  ⚠ Poco espacio: libera disco antes de crear más videos." if low else "  ✓ Suficiente"),
             fg=COLORS["error"] if low else COLORS["ok"],
         )
+        for child in self.diag_frame.winfo_children():
+            child.destroy()
+        for name, ok, required, hint in run_diagnostics():
+            icon, color = ("✓", COLORS["ok"]) if ok else (("✗", COLORS["error"]) if required else ("!", COLORS["warn"]))
+            text = f"{icon}  {name}" + ("" if ok else f" — {hint}")
+            tk.Label(self.diag_frame, text=text, font=("Segoe UI", 11), bg=COLORS["card"], fg=color, anchor="w").pack(anchor="w")
         self.queue_list.delete(*self.queue_list.get_children())
         entries = load_queue()
         for e in entries:
@@ -652,4 +683,7 @@ class App(tk.Tk):
 if __name__ == "__main__":
     os.chdir(ROOT)
     sys.path.insert(0, str(ROOT))
+    local_ffmpeg = ROOT / "tools" / "ffmpeg" / "bin"
+    if (local_ffmpeg / "ffmpeg.exe").exists():  # FFmpeg instalado por instalar.bat dentro de la carpeta
+        os.environ["PATH"] = f"{local_ffmpeg}{os.pathsep}{os.environ['PATH']}"
     App().mainloop()

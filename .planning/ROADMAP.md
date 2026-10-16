@@ -135,3 +135,12 @@
   - [x] 18.4 Verificado (2026-10-15): capturas reales de las 4 pestañas en `screenshots/fase18_tab*.png` revisadas (texto legible, buen contraste, estados en color); `publish_job` con publicación simulada (éxito → "Publicado"; fallo → conserva el veredicto del control y muestra "Error al publicar"); el ejecutor de la ventana lee el progreso de `main.py` (`--dry-run`); el lanzador abre `pythonw app.py` sin consola. Corregido en la verificación: barra de progreso poco visible; carpetas de prueba antiguas que aparecían como "En cola".
     - Los trabajos publicados antes de la Fase 18 (Chernóbil y Poyais) recibieron `quality_report.json` y `publication.json` con sus IDs reales de Buffer para que aparezcan en el historial.
     - Tkinter no tiene modo oscuro del sistema: la ventana usa un tema claro fijo de alto contraste.
+
+- [x] **Phase 19: Paquete portátil para otra PC** (Requisitos: FR-16)
+  - [x] 19.1 Subida a `video-assets` por API con token limitado (FR-16.1).
+  - [x] 19.2 `instalar.bat` + lanzador portable (FR-16.2, FR-16.3).
+  - [x] 19.3 Diagnóstico en la interfaz y `.env.example` completo (FR-16.4).
+  - [x] 19.4 `INSTALACION.md` y `empaquetar.bat` (FR-16.5).
+  - [x] 19.5 Verificado (2026-10-16): paquete de 0,29 MB cifrado (AES-256, nombres de archivo incluidos); instalación limpia en carpeta nueva con FFmpeg del sistema oculto → 6/6 pasos OK (librerías en `.venv`, FFmpeg descargado de GitHub, prueba de arranque); la ventana abre desde esa copia con su FFmpeg local y el diagnóstico todo en verde (`screenshots/fase19_diagnostico_instalacion_limpia.png`). Token fine-grained: subida real a `video-assets` OK (HTTP 200 en raw), archivo de prueba borrado, escritura en otro repo bloqueada (403).
+    - Corregido en la verificación: rutas largas (>90 caracteres) rompían pip → el instalador lo detecta y lo explica; gyan.dev cortaba la descarga de FFmpeg → `curl.exe` con reintentos y GitHub como fuente principal; PowerShell 5.1 trataba el registro del programa (stderr) como error → la prueba de arranque se redirige con `cmd`.
+    - Paquete final generado en `dist\VideosEducativos_Instalador.exe` (no versionado) con contraseña aleatoria entregada al usuario por chat.
