@@ -80,6 +80,14 @@ class ScriptOutput(BaseModel):
     )
     narration_full: str = Field(description="Guion completo concatenado para narración continua")
     scenes: List[Scene] = Field(description="Lista de escenas ordenadas secuencialmente")
+    hook_text: Optional[str] = Field(
+        default=None,
+        description="Texto de gancho que se muestra en pantalla los primeros 2,5 segundos: máximo 8 palabras, la contradicción o promesa más fuerte del video, sin emojis ni hashtags"
+    )
+    closing_question: Optional[str] = Field(
+        default=None,
+        description="Pregunta directa y corta (máximo 12 palabras) al espectador con la que termina la narración, para invitar a comentar"
+    )
 
 
 def _build_system_prompt(duration_minutes: float, target_words: int, num_scenes: int, aspect_ratio: str = "16:9") -> str:
@@ -132,6 +140,11 @@ DIRECTRICES DE COHERENCIA VISUAL (VISUAL CONTRACT & ANTI-FACE-MORPHING):
 10. Para cada escena, incluye 'search_keywords' con 2 a 4 términos esenciales y directos en inglés que representen el objeto, vehículo, lugar o sujeto físico tangible (ej: 'vintage coach bus', 'hotel ballroom', 'signing contract pen', 'vintage race car'), evitando frases largas para que las APIs de archivo fotográfico encuentren coincidencias exactas.
 10b. Para cada escena, incluye 'archive_queries': 2 a 3 consultas en inglés pensadas para encontrar fotografías REALES en Wikimedia Commons o bibliotecas públicas, nombrando cosas que existieron (ej: 'Sir George Pearce', 'Australian Parliament House 1930s', 'Western Australia wheat farm 1930s'), de más específica a más general. No describas el encuadre ni la luz.
 11. Metadatos optimizados para YouTube: Título con alto gancho emocional (añade '#Shorts' si es 9:16), descripción completa y tags relevantes.
+
+RETENCIÓN EN LOS PRIMEROS 2 SEGUNDOS Y COMENTARIOS (la mayoría de espectadores decide en el segundo 2):
+12. 'hook_text': máximo 8 palabras que se mostrarán en grande en pantalla al empezar. Debe ser la contradicción, sorpresa o promesa más fuerte de la historia, entendible sin contexto (ej: 'No estaba en una cueva. Vivía frente al ejército', 'Australia perdió una guerra contra pájaros'). Sin emojis, sin hashtags, sin comillas.
+13. La ESCENA 1 abre directamente con esa idea: su primera frase narrada plantea el gancho, sin introducciones ni contexto previo. Su 'visual_prompt' y sus 'archive_queries' deben apuntar al sujeto MÁS ICÓNICO y reconocible del tema (el protagonista, el lugar o el hecho real), nunca a un plano de ambiente vacío u oscuro.
+14. 'closing_question': pregunta directa y corta al espectador (máximo 12 palabras) que invite a comentar una opinión o dato (ej: '¿Tú habrías comprado tierras en Poyais?'). La ÚLTIMA escena debe terminar narrando exactamente esa pregunta, y 'narration_full' también.
 """
 
 

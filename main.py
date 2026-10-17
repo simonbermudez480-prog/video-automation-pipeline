@@ -37,7 +37,7 @@ from src.script_generator import generate_script, save_script_to_disk, ScriptOut
 from src.voice_synthesizer import synthesize_voice
 from src.audio_processor import process_audio_and_align
 from src.image_generator import generate_images_for_scenes
-from src.quality_gate import MANIFEST_NAME, run_quality_gate
+from src.quality_gate import MANIFEST_NAME, choose_opening_image, load_manifest, run_quality_gate
 from src.publish_queue import ask_yes_no, enqueue, process_queue
 from src.video_assembler import apply_scene_merges, assemble_video, choose_look
 from src.youtube_uploader import upload_video_to_youtube
@@ -113,6 +113,14 @@ def extract_topics(args: argparse.Namespace) -> List[str]:
     return unique_topics
 
 
+def hook_for(script: ScriptOutput) -> Optional[str]:
+    """Texto de gancho del guion o, si falta (guiones antiguos), el título sin hashtags si es corto."""
+    if script.hook_text:
+        return script.hook_text.strip()
+    title = re.sub(r"#\w+", "", script.metadata.title).replace("|", " ").strip(" -:")
+    return title if 0 < len(title.split()) <= 12 else None
+
+
 def publish_social(
     topic: str,
     narration_full: str,
@@ -122,6 +130,7 @@ def publish_social(
     privacy: Optional[str],
     llm_provider: Optional[str],
     duration_minutes: Optional[float],
+    closing_question: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Redacta los copies con IA y publica/empaqueta el video (usado por el flujo normal, la cola y la interfaz).
@@ -135,6 +144,13 @@ def publish_social(
             provider=llm_provider,
         )
         logger.info("Copies listos: Título YouTube = '{}'", social_bundle.youtube_shorts.title)
+        if closing_question:
+            # La pregunta final del video va en los 3 textos y como comentario (primer comentario en Instagram)
+            q = closing_question.strip()
+            social_bundle.tiktok.caption = f"{social_bundle.tiktok.caption.rstrip()} {q}"
+            social_bundle.instagram_reels.caption = f"{social_bundle.instagram_reels.caption.rstrip()}\n\n{q}"
+            social_bundle.youtube_shorts.description = f"{q}\n\n{social_bundle.youtube_shorts.description}"
+            social_bundle.youtube_shorts.pinned_comment = q
 
         pub_results = publish_video_multiplatform(
             video_path=video_path,
@@ -185,6 +201,7 @@ def publish_job(job_dir: Path, platforms: List[str], privacy: Optional[str], llm
         privacy=privacy,
         llm_provider=llm_provider,
         duration_minutes=duration,
+        closing_question=script.closing_question,
     )
     save_publication(job_dir, platforms, results)
     ok = bool(results) and all((results.get(p) or {}).get("status") == "success" for p in platforms)
@@ -206,6 +223,7 @@ def publish_queued(entry: dict, video_path: Path) -> None:
         privacy=entry.get("privacy"),
         llm_provider=entry.get("llm_provider"),
         duration_minutes=entry.get("duration_minutes"),
+        closing_question=script.closing_question,
     )
     job_dir = Path(entry["job_dir"])
     save_publication(job_dir, entry["platforms"], results)
@@ -372,11 +390,15 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             "failing_scenes": sorted(gate.failing_scenes),
             "merged_scenes": {str(k): v for k, v in sorted(gate.merges.items())},
             "contact_sheet": str(contact_sheet),
+            "hook_text": hook_for(script_data),
+            "closing_question": script_data.closing_question,
         }
         (job_dir / "quality_report.json").write_text(json.dumps(quality_report, ensure_ascii=False, indent=2), encoding="utf-8")
     assembly_scenes, assembly_images = (
         apply_scene_merges(script_data.scenes, image_paths, gate.merges) if gate else (script_data.scenes, image_paths)
     )
+    # Apertura con la imagen de mayor impacto si supera claramente a la escena 1 (FR-17.2)
+    opening_image = choose_opening_image(image_paths, load_manifest(image_paths[0].parent), gate.merges) if gate else None
 
     # -------------------------------------------------------------
     # PASO 5: Montaje Audiovisual con Efecto Dinámico (FFmpeg)
@@ -394,6 +416,9 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             aspect_ratio=aspect_ratio,
             temp_dir=job_temp_dir,
             look=choose_look(getattr(script_data, "visual_contract", None)),
+            hook_text=hook_for(script_data),
+            closing_question=script_data.closing_question,
+            opening_image=opening_image,
         )
         # Sincronizar copia con video_final.mp4 para conveniencia
         try:
@@ -475,6 +500,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             privacy=args.privacy,
             llm_provider=args.llm_provider,
             duration_minutes=args.duration_minutes,
+            closing_question=script_data.closing_question,
         )
         if platforms_to_publish:
             save_publication(job_dir, platforms_to_publish, pub_results)

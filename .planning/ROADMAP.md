@@ -144,3 +144,16 @@
   - [x] 19.5 Verificado (2026-10-16): paquete de 0,29 MB cifrado (AES-256, nombres de archivo incluidos); instalación limpia en carpeta nueva con FFmpeg del sistema oculto → 6/6 pasos OK (librerías en `.venv`, FFmpeg descargado de GitHub, prueba de arranque); la ventana abre desde esa copia con su FFmpeg local y el diagnóstico todo en verde (`screenshots/fase19_diagnostico_instalacion_limpia.png`). Token fine-grained: subida real a `video-assets` OK (HTTP 200 en raw), archivo de prueba borrado, escritura en otro repo bloqueada (403).
     - Corregido en la verificación: rutas largas (>90 caracteres) rompían pip → el instalador lo detecta y lo explica; gyan.dev cortaba la descarga de FFmpeg → `curl.exe` con reintentos y GitHub como fuente principal; PowerShell 5.1 trataba el registro del programa (stderr) como error → la prueba de arranque se redirige con `cmd`.
     - Paquete final generado en `dist\VideosEducativos_Instalador.exe` (no versionado) con contraseña aleatoria entregada al usuario por chat.
+
+- [ ] **Phase 20: Gancho inicial y pregunta final** (Requisitos: FR-17) — *backup previo: `backups/backup_pre_hook_20261017.zip` y `repo_history_20261017_pre_hook.bundle`*
+  - [x] 20.1 Guion: campos `hook_text` y `closing_question`; escena 1 con el sujeto más icónico y consultas de archivo dirigidas (FR-17.1, FR-17.2, FR-17.4).
+  - [x] 20.2 Montaje: texto de gancho en pantalla (0–2,5 s), acercamiento rápido inicial y pregunta final en pantalla (últimos 3 s) sin chocar con los subtítulos (FR-17.1, FR-17.3, FR-17.4).
+  - [x] 20.3 Revisor visual: puntuación de impacto por imagen y "avance" de ~1,2 s con la imagen más fuerte si no es la escena 1 (FR-17.2).
+  - [x] 20.4 Textos de publicación con la pregunta; spike de primer comentario por Buffer y, si no se puede, "Comentario para fijar" copiable en la interfaz (FR-17.4, FR-17.5).
+  - [x] 20.5 Verificado (2026-10-17), sin publicar:
+    - Guion nuevo (Victor Lustig): `hook_text` de 8 palabras, escena 1 abre narrando el gancho con el sujeto icónico (Torre Eiffel) y consultas de archivo dirigidas; la última escena y `narration_full` terminan con `closing_question`.
+    - Re-montaje de Poyais en copia: impacto real por imagen (escena 1 = 7, máx. 8 → sin apertura alternativa por no superar +2); gancho legible 0–2,5 s y pregunta final en amarillo los últimos ~3 s, sin chocar con subtítulos; audio completo (153,07/153,08 s). Capturas: `screenshots/fase20_frames_poyais.png`, `fase20_frame_inicio.png`, `fase20_frame_final.png`.
+    - Corregido en la verificación: el corte inicial no se notaba con la misma imagen → la apertura ahora es un primer plano cerrado (zoom 1,7–1,9) y corta al plano completo antes de 1,5 s (`screenshots/fase20_apertura_corte.png`).
+    - Spike Buffer: solo Instagram acepta `firstComment` (se envía la pregunta); TikTok y YouTube no → recuadro "Comentario para fijar" con botón Copiar en la interfaz (`screenshots/fase20_interfaz_comentario.png`). Pregunta añadida a los 3 textos (verificado sin red).
+    - Hallazgo: Buffer tiene `isAiGenerated` para TikTok, YouTube e Instagram; los videos con imágenes FLUX podrían requerir la etiqueta de contenido IA (decisión pendiente del usuario).
+  - [ ] 20.6 Medición tras publicar 3–5 videos nuevos: comparar con la línea base de Bin Laden (FR-17.6).

@@ -344,6 +344,12 @@ class App(tk.Tk):
         self.review_status.pack(anchor="w", pady=(4, 4), fill="x")
         self.review_detail = ttk.Label(right, text="", style="Muted.TLabel", wraplength=560, justify="left")
         self.review_detail.pack(anchor="w")
+        # Pregunta final para fijar a mano en TikTok y YouTube (Instagram la recibe como primer comentario)
+        self.comment_frame = tk.Frame(right, bg="#EEF3FB", padx=10, pady=6)
+        self.comment_label = tk.Label(self.comment_frame, text="", font=("Segoe UI", 11), bg="#EEF3FB", fg=COLORS["text"],
+                                      anchor="w", justify="left", wraplength=430)
+        self.comment_label.pack(side="left", fill="x", expand=True)
+        ttk.Button(self.comment_frame, text="Copiar", command=self._copy_comment).pack(side="right")
         self.sheet_label = tk.Label(right, bg=COLORS["card"])
         self.sheet_label.pack(anchor="w", pady=8)
         ttk.Label(right, text="Verde = imagen aprobada · Naranja = se une con la escena anterior · Rojo = problema", style="Muted.TLabel").pack(anchor="w")
@@ -402,6 +408,12 @@ class App(tk.Tk):
             text, color = "✗ El último intento de publicación falló. Puedes intentarlo de nuevo.", COLORS["error"]
         self.review_status.configure(text=text, fg=color)
         self.review_detail.configure(text=detail)
+        question = (report.get("closing_question") or "").strip()
+        if question:
+            self.comment_label.configure(text=f"Comentario para fijar en TikTok y YouTube:\n«{question}»")
+            self.comment_frame.pack(anchor="w", fill="x", pady=(6, 0), before=self.sheet_label)
+        else:
+            self.comment_frame.pack_forget()
         sheet = Path(report.get("contact_sheet", ""))
         if sheet.exists():
             with Image.open(sheet) as im:
@@ -411,6 +423,14 @@ class App(tk.Tk):
             self.sheet_label.configure(image=self._photo)
         else:
             self.sheet_label.configure(image="")
+
+    def _copy_comment(self):
+        job = self._selected_job()
+        question = (job["report"].get("closing_question") or "").strip() if job else ""
+        if question:
+            self.clipboard_clear()
+            self.clipboard_append(question)
+            self.publish_msg.configure(text="✓ Pregunta copiada. Pégala como comentario y fíjala en TikTok y YouTube.", foreground=COLORS["ok"])
 
     def _play_selected(self):
         job = self._selected_job()

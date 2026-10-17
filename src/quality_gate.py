@@ -155,8 +155,12 @@ def _build_batch_prompt(items: list[dict], era: str, topic: str = "") -> str:
         )
     lines += [
         "",
+        "Also rate 'impact' from 1 to 10 for every image: how striking and instantly understandable it would be as the",
+        "FIRST frame of a vertical video on a phone (a big, clear, recognizable subject, strong contrast, emotion or surprise = high;",
+        "dark, empty, generic or cluttered = low).",
+        "",
         "Output strictly JSON with one verdict per image:",
-        '{"verdicts": [{"scene": <n>, "approved": true|false, "reason": "brief explanation in Spanish", '
+        '{"verdicts": [{"scene": <n>, "approved": true|false, "impact": <1-10>, "reason": "brief explanation in Spanish", '
         '"detected_issues": ["UNWANTED_HUMAN"|"WATERMARK_OR_TEXT"|"ABSURD_DISSONANCE"|"ANACHRONISM"|"COLLAGE"]}]}',
     ]
     return "\n".join(lines)
@@ -274,12 +278,12 @@ def _call_vision(contents: list) -> Optional[dict]:
     return None
 
 
-def audit_images_batch(items: list[dict], era: str = "", topic: str = "") -> Optional[dict[int, tuple[bool, str, list[str]]]]:
+def audit_images_batch(items: list[dict], era: str = "", topic: str = "") -> Optional[dict[int, tuple[bool, str, list[str], int]]]:
     """
     Audita varias escenas con UNA llamada de visión por lote (máx. AUDIT_BATCH_SIZE imágenes).
     items: [{"idx": int, "path": Path, "narration": str, "prompt": str, "shot_type": str,
              "source_kind": "archive"|"stock"|"ai", "source_title": str}]
-    Retorna {idx: (aprobada, motivo, problemas)} o None si la visión no está disponible (fail-closed).
+    Retorna {idx: (aprobada, motivo, problemas, impacto 1-10)} o None si la visión no está disponible (fail-closed).
     """
     if not items:
         return {}
@@ -287,7 +291,7 @@ def audit_images_batch(items: list[dict], era: str = "", topic: str = "") -> Opt
         logger.warning("GEMINI_API_KEY no configurada: las imágenes quedan sin auditar.")
         return None
 
-    results: dict[int, tuple[bool, str, list[str]]] = {}
+    results: dict[int, tuple[bool, str, list[str], int]] = {}
     for start in range(0, len(items), AUDIT_BATCH_SIZE):
         batch = items[start:start + AUDIT_BATCH_SIZE]
         contents: list = [_build_batch_prompt(batch, era, topic)]
@@ -312,11 +316,15 @@ def audit_images_batch(items: list[dict], era: str = "", topic: str = "") -> Opt
         for it in batch:
             v = by_scene.get(it["idx"])
             if v is None:
-                results[it["idx"]] = (False, "Sin veredicto del auditor para esta imagen", ["NO_VERDICT"])
+                results[it["idx"]] = (False, "Sin veredicto del auditor para esta imagen", ["NO_VERDICT"], 0)
                 continue
             approved = bool(v.get("approved", False))
             issues = [str(i) for i in v.get("detected_issues", [])]
-            results[it["idx"]] = (approved, str(v.get("reason", "")), issues)
+            try:
+                impact = max(0, min(10, int(v.get("impact", 0))))
+            except (TypeError, ValueError):
+                impact = 0
+            results[it["idx"]] = (approved, str(v.get("reason", "")), issues, impact)
             log = logger.info if approved else logger.warning
             log("[QA Lote] Escena #{:03d} {}: {}", it["idx"], "APROBADA" if approved else f"RECHAZADA ({', '.join(issues)})", v.get("reason", ""))
     return results
@@ -383,6 +391,27 @@ def evaluate_gate(image_paths: list[Path], manifest: dict) -> GateResult:
 
     unaudited = {i for i, why in problems.items() if why == "unaudited"}
     return GateResult(passed=not reasons, reasons=reasons, failing_scenes=set(problems), merges=merges, unaudited=unaudited)
+
+
+def choose_opening_image(image_paths: list[Path], manifest: dict, merges: dict[int, int], min_gain: int = 2) -> Optional[Path]:
+    """
+    Imagen para el plano de apertura (FR-17.2): la de mayor impacto entre las escenas aprobadas y no fusionadas,
+    solo si supera a la escena 1 por al menos `min_gain` puntos. Si no, la apertura usa la propia escena 1.
+    """
+    scenes = manifest.get("scenes", {})
+
+    def impact(i: int) -> int:
+        e = scenes.get(str(i), {})
+        return int(e.get("impact") or 0) if e.get("audit") in ("approved", "disabled") else -1
+
+    candidates = [i for i in range(1, len(image_paths) + 1) if i not in merges and impact(i) >= 0]
+    if not candidates:
+        return None
+    best = max(candidates, key=impact)
+    if best != 1 and impact(best) >= impact(1) + min_gain:
+        logger.info("Apertura con la escena #{:03d} (impacto {}) en lugar de la #001 (impacto {}).", best, impact(best), impact(1))
+        return image_paths[best - 1]
+    return None
 
 
 def build_contact_sheet(

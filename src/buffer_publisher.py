@@ -415,7 +415,9 @@ class BufferPublisher:
                 "metadata": {
                     "instagram": {
                         "shouldShareToFeed": True,
-                        "type": "reel"
+                        "type": "reel",
+                        # Instagram es la única de las 3 redes que acepta primer comentario por la API de Buffer
+                        **({"firstComment": bundle.youtube_shorts.pinned_comment} if bundle.youtube_shorts.pinned_comment else {}),
                     }
                 }
             }

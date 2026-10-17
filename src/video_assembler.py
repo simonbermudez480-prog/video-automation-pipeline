@@ -21,6 +21,12 @@ from src.script_generator import Scene
 
 TRANSITION_DURATION = 0.5  # Duración del fundido cruzado en segundos
 
+# Apertura (FR-17): la mayoría de espectadores decide en el segundo 2
+OPENING_DURATION = 1.2   # plano de apertura con acercamiento rápido antes de la escena 1
+QUICK_CUT = 0.12         # corte casi seco entre la apertura y la escena 1
+HOOK_DURATION = 2.6      # el texto de gancho se ve durante los primeros segundos
+QUESTION_DURATION = 3.2  # la pregunta final se ve durante los últimos segundos
+
 # Gradación uniforme por video (FR-13.2): unifica fotos de archivo, stock e IA en un mismo look
 ARCHIVAL_ERA_CUTOFF = 1960  # épocas anteriores: look monocromo cálido, como las fotos de archivo
 GRADE_FILTERS = {
@@ -64,16 +70,24 @@ def _get_dynamic_ken_burns_filter(
     fps: int,
     resolution: str,
     look: Optional[str] = None,
+    punch: bool = False,
 ) -> str:
     """
     Genera la cadena de filtros zoompan de FFmpeg con movimiento CONTINUO y fluido,
     adaptado tanto a formato 16:9 (horizontal) como 9:16 (vertical para Shorts/TikTok).
+    punch=True: acercamiento rápido y marcado para el plano de apertura.
     """
     motion_type = scene_index % 5
     safe_frames = max(num_frames, 1)
     is_vertical = "1080x1920" in resolution or resolution == "1080x1920"
 
-    if is_vertical:
+    if punch:
+        buf_w, buf_h = (1440, 2560) if is_vertical else (2560, 1440)
+        # Primer plano cerrado del centro (detalle) que se sigue cerrando; al cortar a la escena 1 el cambio se nota
+        zoom_expr = f"1.70+0.20*(on/{safe_frames})"
+        x_expr = "iw/2-(iw/zoom/2)"
+        y_expr = "ih/2-(ih/zoom/2)"
+    elif is_vertical:
         buf_w, buf_h = 1440, 2560
         if motion_type == 0:
             # Zoom In vertical centrado
@@ -148,6 +162,7 @@ def render_scene_clip(
     resolution: str = "1920x1080",
     threads: int = 2,
     look: Optional[str] = None,
+    punch: bool = False,
 ) -> Path:
     """
     Renderiza un clip de video individual para una escena con efecto Ken Burns continuo.
@@ -156,7 +171,7 @@ def render_scene_clip(
     output_clip_path.parent.mkdir(parents=True, exist_ok=True)
     num_frames = max(round(duration * fps), fps)
 
-    filter_graph = _get_dynamic_ken_burns_filter(scene_index, num_frames, fps, resolution, look=look)
+    filter_graph = _get_dynamic_ken_burns_filter(scene_index, num_frames, fps, resolution, look=look, punch=punch)
 
     cmd = [
         "ffmpeg",
@@ -181,6 +196,53 @@ def render_scene_clip(
     return output_clip_path
 
 
+def _ass_time(seconds: float) -> str:
+    seconds = max(seconds, 0.0)
+    return f"{int(seconds // 3600)}:{int(seconds % 3600 // 60):02d}:{seconds % 60:05.2f}"
+
+
+def _ass_text(text: str) -> str:
+    return " ".join((text or "").replace("{", "(").replace("}", ")").replace("\\", "").split())
+
+
+def write_overlay_ass(path: Path, hook_text: Optional[str], closing_question: Optional[str], total_duration: float, is_vertical: bool) -> Optional[Path]:
+    """
+    Crea un archivo ASS con el texto de gancho (inicio) y la pregunta final (cierre) en el tercio superior,
+    lejos de los subtítulos (abajo) y de los botones de TikTok/Reels/Shorts (derecha y parte superior).
+    """
+    if not (hook_text or closing_question):
+        return None
+    play_x, play_y = (1080, 1920) if is_vertical else (1920, 1080)
+    size, margin_v, margin_h = (74, 270, 130) if is_vertical else (64, 90, 200)
+    # BorderStyle=3: caja casi opaca detrás del texto para contraste alto sobre cualquier imagen
+    header = (
+        "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\nScaledBorderAndShadow: yes\n"
+        f"PlayResX: {play_x}\nPlayResY: {play_y}\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, "
+        "StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Hook,Arial,{size},&H00FFFFFF,&H00FFFFFF,&H26000000,&H26000000,-1,0,0,0,100,100,0,0,3,16,0,8,{margin_h},{margin_h},{margin_v},1\n"
+        f"Style: Question,Arial,{size},&H0000D7FF,&H0000D7FF,&H26000000,&H26000000,-1,0,0,0,100,100,0,0,3,16,0,8,{margin_h},{margin_h},{margin_v},1\n\n"
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+    events = []
+    if hook_text:
+        events.append(f"Dialogue: 0,{_ass_time(0)},{_ass_time(HOOK_DURATION)},Hook,,0,0,0,,{{\\fad(0,200)}}{_ass_text(hook_text)}")
+    if closing_question:
+        start = max(total_duration - QUESTION_DURATION, HOOK_DURATION + 1.0)
+        events.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(total_duration + 2)},Question,,0,0,0,,{{\\fad(200,0)}}{_ass_text(closing_question)}")
+    path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
+    return path
+
+
+def _ffmpeg_filter_path(path: Path) -> str:
+    """Ruta para filtros de FFmpeg (subtitles/ass): relativa al proyecto si se puede, para evitar escapar 'C:'."""
+    try:
+        return path.resolve().relative_to(ROOT_DIR).as_posix()
+    except ValueError:
+        return path.resolve().as_posix().replace(":", r"\:")
+
+
 def assemble_video(
     scenes: List[Scene],
     image_paths: List[Path],
@@ -191,14 +253,20 @@ def assemble_video(
     aspect_ratio: str = "16:9",
     temp_dir: Optional[Path] = None,
     look: Optional[str] = None,
+    hook_text: Optional[str] = None,
+    closing_question: Optional[str] = None,
+    opening_image: Optional[Path] = None,
+    quick_open: bool = True,
 ) -> Path:
     """
     Ensambla el video final aplicando:
     1. Renderizado paralelo de clips individuales con Ken Burns dinámico (16:9 o 9:16 vertical).
-    2. Transición suave de fundido cruzado (xfade de 0.5s) entre cada escena.
+    2. Apertura rápida (FR-17): ~1,2 s de acercamiento marcado (con opening_image, la imagen de mayor impacto)
+       y corte casi seco a la escena 1; luego fundidos de 0,5 s entre escenas.
     3. Mapeo y mezcla con la pista de audio original.
     4. Quemado de subtítulos con alto contraste visual (WCAG AAA) y zona segura móvil en 9:16.
-    5. Exportación multi-hilo acelerada a 1080p, 30 FPS.
+    5. Texto de gancho al inicio y pregunta final al cierre, en el tercio superior.
+    6. Exportación multi-hilo acelerada a 1080p, 30 FPS.
     """
     final_output = output_video_path or settings.FINAL_VIDEO_PATH
     final_output.parent.mkdir(parents=True, exist_ok=True)
@@ -227,31 +295,43 @@ def assemble_video(
     if len(image_paths) < total_scenes:
         raise ValueError(f"Se requieren {total_scenes} imágenes pero solo hay {len(image_paths)}")
 
+    # Plan de planos: (imagen, duración, índice de movimiento, ¿acercamiento rápido?) y fundido hacia el plano siguiente
+    shots = [(img, scene.duration or 6.0, idx, False) for idx, (scene, img) in enumerate(zip(scenes, image_paths), start=1)]
+    transitions = [TRANSITION_DURATION] * max(len(shots) - 1, 0)
+    if quick_open and shots and shots[0][1] > OPENING_DURATION + 1.5:
+        first_img, first_dur, first_idx, _ = shots[0]
+        shots[0] = (first_img, first_dur - OPENING_DURATION, first_idx, False)
+        shots.insert(0, (opening_image or first_img, OPENING_DURATION, 0, True))
+        transitions.insert(0, QUICK_CUT)
+        logger.info("Apertura rápida: {:.1f}s con {} y corte a la escena 1.", OPENING_DURATION,
+                    "la imagen de mayor impacto" if opening_image else "un acercamiento a la escena 1")
+    total_scenes = len(shots)
+    total_duration = sum(s[1] for s in shots)
+
     # 1. Preparar lista de clips individuales a renderizar
     clip_render_tasks = []
-    for idx, (scene, img_path) in enumerate(zip(scenes, image_paths), start=1):
-        base_duration = scene.duration or 6.0
-        # Cada fundido empieza TRANSITION_DURATION antes del cambio de escena, así que cada clip (también el último)
-        # se adelanta ese tiempo y necesita durar lo mismo de más para terminar junto con la narración.
+    for idx, (img_path, base_duration, motion_idx, punch) in enumerate(shots, start=1):
+        # Cada fundido empieza antes del cambio de plano, así que cada clip (también el último) se adelanta
+        # y necesita durar TRANSITION_DURATION de más para terminar junto con la narración.
         render_duration = base_duration + TRANSITION_DURATION
         clip_path = working_temp_dir / f"clip_{idx:03d}.mp4"
-        clip_render_tasks.append((idx, scene, img_path, render_duration, clip_path))
+        clip_render_tasks.append((idx, motion_idx, punch, img_path, base_duration, render_duration, clip_path))
 
     # Renderizado paralelo de clips con ThreadPoolExecutor
     logger.info("Renderizando clips dinámicos concurrentemente con {} workers...", clip_workers)
     clip_paths_dict = {}
 
     def _render_worker(task):
-        idx, scene, img_path, r_dur, clip_path = task
+        idx, motion_idx, punch, img_path, base_dur, r_dur, clip_path = task
         logger.info(
-            "[{}/{}] Renderizando clip Escena #{:02d} (Duración base: {:.2f}s, Render: {:.2f}s)...",
+            "[{}/{}] Renderizando clip {} (Duración base: {:.2f}s, Render: {:.2f}s)...",
             idx,
             total_scenes,
-            scene.scene_id,
-            scene.duration or 6.0,
+            "de apertura" if punch else f"Escena #{motion_idx:02d}",
+            base_dur,
             r_dur,
         )
-        render_scene_clip(img_path, r_dur, clip_path, idx, fps, resolution, threads=2, look=look)
+        render_scene_clip(img_path, r_dur, clip_path, motion_idx, fps, resolution, threads=2, look=look, punch=punch)
         return idx, clip_path
 
     with ThreadPoolExecutor(max_workers=clip_workers) as executor:
@@ -278,12 +358,12 @@ def assemble_video(
 
     if total_scenes > 1:
         for i in range(1, total_scenes):
-            scene_duration = scenes[i - 1].duration or 6.0
-            cumulative_offset += scene_duration
-            offset = max(0.1, round(cumulative_offset - TRANSITION_DURATION, 3))
+            cumulative_offset += shots[i - 1][1]
+            trans = transitions[i - 1]
+            offset = max(0.1, round(cumulative_offset - trans, 3))
             out_v = f"v{i}"
             filter_complex_steps.append(
-                f"[{last_v}][{i}:v]xfade=transition=fade:duration={TRANSITION_DURATION:.1f}:offset={offset:.3f}[{out_v}]"
+                f"[{last_v}][{i}:v]xfade=transition=fade:duration={trans:.2f}:offset={offset:.3f}[{out_v}]"
             )
             last_v = out_v
     else:
@@ -292,10 +372,7 @@ def assemble_video(
     # 3. Quemado de subtítulos con alto contraste y zona segura según aspect ratio
     final_video_label = last_v
     if burn_subtitles and subtitles_path and subtitles_path.exists():
-        try:
-            rel_srt = subtitles_path.resolve().relative_to(ROOT_DIR).as_posix()
-        except ValueError:
-            rel_srt = subtitles_path.resolve().as_posix().replace(":", r"\:")
+        rel_srt = _ffmpeg_filter_path(subtitles_path)
 
         if is_vertical:
             sub_play_res_x = 1080
@@ -323,6 +400,12 @@ def assemble_video(
         final_video_label = "vout"
         logger.info("Añadiendo filtro de subtítulos de alto contraste ({}, PlayResY={}, MarginV={}): {}", aspect_ratio, sub_play_res_y, sub_margin_v, sub_filter[:75])
 
+    # 4. Texto de gancho (inicio) y pregunta final (cierre) en el tercio superior
+    overlay = write_overlay_ass(working_temp_dir / "overlay_texts.ass", hook_text, closing_question, total_duration, is_vertical)
+    if overlay:
+        filter_complex_steps.append(f"[{final_video_label}]ass='{_ffmpeg_filter_path(overlay)}'[vtext]")
+        final_video_label = "vtext"
+        logger.info("Texto en pantalla: gancho={!r} | pregunta final={!r}", hook_text, closing_question)
 
     # Red de seguridad: congelar el último frame para que el video nunca sea más corto que la narración;
     # -shortest recorta después al largo exacto del audio.

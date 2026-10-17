@@ -864,8 +864,8 @@ def generate_images_for_scenes(
                     verdicts = {}
                     for i in to_audit:
                         entries[i].update(audit="unaudited", reason="Visión no disponible (fail-closed)")
-                for i, (approved, reason, issues) in verdicts.items():
-                    entries[i].update(audit="approved" if approved else "rejected", reason=reason, issues=issues)
+                for i, (approved, reason, issues, impact) in verdicts.items():
+                    entries[i].update(audit="approved" if approved else "rejected", reason=reason, issues=issues, impact=impact)
                     if not approved:
                         retry.add(i)
         to_audit = set()

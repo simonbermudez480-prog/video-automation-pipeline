@@ -12,7 +12,7 @@ from typing import Callable
 
 from src.config import OUTPUT_DIR
 from src.logger import logger
-from src.quality_gate import SOURCE_KINDS, audit_images_batch, load_manifest, run_quality_gate, save_manifest
+from src.quality_gate import SOURCE_KINDS, audit_images_batch, choose_opening_image, load_manifest, run_quality_gate, save_manifest
 from src.script_generator import ScriptOutput
 from src.video_assembler import apply_scene_merges, assemble_video, choose_look
 
@@ -68,8 +68,8 @@ def _reaudit_pending(images_dir: Path, script: ScriptOutput, topic: str) -> bool
     )
     if verdicts is None:
         return False
-    for i, (approved, reason, issues) in verdicts.items():
-        entries[str(i)].update(audit="approved" if approved else "rejected", reason=reason, issues=issues)
+    for i, (approved, reason, issues, impact) in verdicts.items():
+        entries[str(i)].update(audit="approved" if approved else "rejected", reason=reason, issues=issues, impact=impact)
     save_manifest(images_dir, manifest)
     return True
 
@@ -140,6 +140,9 @@ def process_queue(publish: Callable[[dict, Path], None], require_approval: bool 
             aspect_ratio=entry.get("aspect_ratio", "9:16"),
             temp_dir=Path(entry["job_dir"]) / "temp",
             look=choose_look(script.visual_contract),
+            hook_text=script.hook_text,
+            closing_question=script.closing_question,
+            opening_image=choose_opening_image(image_paths, load_manifest(images_dir), gate.merges),
         )
         publish(entry, video_path)
         entry["status"] = "published"
