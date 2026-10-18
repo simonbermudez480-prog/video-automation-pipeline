@@ -201,6 +201,14 @@ def friendly_error(message: str) -> str:
         return "Buffer no pudo leer el video. Revisa tu conexión y el espacio en disco, y reintenta."
     if "not_connected" in m or "no conectad" in m:
         return "La cuenta no está conectada en Buffer."
+    if "no fue posible alojar" in m:
+        return "No se pudo subir el video a internet para Buffer. Revisa la conexión y el token de GitHub, y reintenta."
+    if "redactar los textos" in m:
+        return "No se pudieron redactar los textos ni publicar. Revisa la conexión y la clave de Gemini, y reintenta."
+    if "limit" in m and ("reach" in m or "límite" in m):
+        return "Buffer alcanzó el límite de publicaciones del plan gratuito. Espera o libera la cola de Buffer."
+    if "unauthorized" in m or "401" in m:
+        return "Buffer rechazó el token. Revisa BUFFER_ACCESS_TOKEN en el archivo .env."
     return message or "Error desconocido."
 
 
@@ -710,8 +718,9 @@ class App(ctk.CTk):
         bar = ctk.CTkFrame(body, fg_color="transparent")
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         button(bar, "Actualizar enlaces", self._refresh_links, "secondary", ICON["refresh"]).pack(side="left")
-        self.history_msg = ctk.CTkLabel(bar, text="", font=font(13), text_color=C["muted"])
-        self.history_msg.pack(side="left", padx=14)
+        self.history_msg = ctk.CTkLabel(bar, text="", font=font(13), text_color=C["muted"], anchor="w", justify="left",
+                                        wraplength=760)
+        self.history_msg.pack(side="left", fill="x", expand=True, padx=14)
         self.history_alert = ctk.CTkFrame(body, fg_color=C["error_bg"], corner_radius=10)
         self.history_list = ctk.CTkScrollableFrame(body, fg_color=C["surface"], corner_radius=12, border_width=1,
                                                    border_color=C["hairline"], scrollbar_button_color=C["surface3"],
@@ -942,6 +951,8 @@ class App(ctk.CTk):
     # ---------------- Tareas en segundo plano ----------------
     def _begin_task(self, kind: str, args: list[str]):
         self.current_task = kind
+        self.last_error = ""
+        self.task_job = Path(args[args.index("--publish-job") + 1]) if "--publish-job" in args else None
         self.runner.start(args)
         self.create_btn.configure(state="disabled")
         self.queue_btn.configure(state="disabled")
@@ -973,11 +984,18 @@ class App(ctk.CTk):
                 if running:
                     self._set_step(running[0], "error")
                 self.create_status.configure(text="Detenido", text_color=C["error"])
-                self.create_msg.configure(text="La creación se detuvo. Abre el registro técnico para ver el motivo.", text_color=C["error"])
+                reason = f" Motivo: {self.last_error}" if self.last_error else " Abre el registro técnico para ver el motivo."
+                self.create_msg.configure(text="La creación se detuvo." + reason, text_color=C["error"])
         elif kind == "publish":
             ok = code == 0
+            publication = _read_json(self.task_job / "publication.json") if self.task_job else {}
+            failed = [(PLATFORM_NAMES.get(p, p), i.get("message")) for p, i in publication.get("platforms", {}).items()
+                      if i.get("status") != "success"]
             text = ("Publicado. Los enlaces aparecen en «Historial» en unos minutos." if ok
-                    else "La publicación tuvo errores. Mira el detalle en «Historial».")
+                    else "La publicación tuvo errores. " + (f"{failed[0][0]}: {friendly_error(failed[0][1])}" if failed
+                                                             else "Mira el detalle en «Historial»."))
+            if publication.get("copy_source") == "plantilla":
+                text += " Ojo: la IA no respondió y los textos salieron de la plantilla automática."
             if self.current_page == "review" and hasattr(self, "review_msg") and self.review_msg.winfo_exists():
                 self.review_msg.configure(text=text, text_color=C["ok"] if ok else C["error"])
             self.history_msg.configure(text=text, text_color=C["ok"] if ok else C["error"])
@@ -985,7 +1003,7 @@ class App(ctk.CTk):
         elif kind == "repair":
             text = {0: "Reparado: ahora supera el control de calidad. Revísalo y publícalo.",
                     2: "Reparado en parte: sigue sin superar el control. Mira la hoja de contacto antes de decidir."}.get(
-                code, "La reparación se detuvo. Abre el registro técnico en «Crear video» para ver el motivo.")
+                code, f"La reparación se detuvo. {self.last_error or 'Abre el registro técnico en «Crear video» para ver el motivo.'}")
             self.show_page("review")
             if hasattr(self, "review_msg") and self.review_msg.winfo_exists():
                 self.review_msg.configure(text=text, text_color=C["ok"] if code == 0 else C["warn"] if code == 2 else C["error"])
@@ -1011,6 +1029,8 @@ class App(ctk.CTk):
                         self.create_msg.configure(text=f"Paso {n + 1} de 6: {STEPS[n]}…", text_color=C["muted"])
                 if self.current_task in ("create", "repair"):
                     self._log(friendly(value))
+                if re.search(r"\| (ERROR|CRITICAL) ", value):  # el último error se muestra si la tarea falla (FR-19.6)
+                    self.last_error = friendly(value).split("  ", 1)[-1][:220]
         except queue.Empty:
             pass
         self.after(200, self._poll_runner)

@@ -41,6 +41,7 @@ from src.quality_gate import MANIFEST_NAME, choose_opening_image, load_manifest,
 from src.publish_queue import ask_yes_no, enqueue, process_queue
 from src.video_assembler import apply_scene_merges, assemble_video, choose_look
 from src.youtube_uploader import upload_video_to_youtube
+from src import social_copywriter
 from src.social_copywriter import generate_social_copy, SocialBundle
 from src.multiplatform_publisher import publish_video_multiplatform
 
@@ -167,10 +168,11 @@ def publish_social(
         )
         if "youtube" in pub_results and pub_results["youtube"].get("url"):
             logger.success("Video disponible en YouTube: {}", pub_results["youtube"]["url"])
+        pub_results["copy_source"] = social_copywriter.LAST_COPY_SOURCE
         return pub_results
     except Exception as e:
         logger.error("Error durante la generación de copies o publicación social: {}", e)
-        return None
+        return {"error": f"Fallo al redactar los textos o publicar: {e}"}
 
 
 def save_publication(job_dir: Path, platforms: List[str], results: Optional[dict]) -> None:
@@ -182,8 +184,13 @@ def save_publication(job_dir: Path, platforms: List[str], results: Optional[dict
     path = job_dir / "publication.json"
     data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"platforms": {}}
     data["published_at"] = datetime.now().isoformat(timespec="seconds")
+    if results.get("copy_source"):
+        data["copy_source"] = results["copy_source"]
+    # Si la plataforma no tiene respuesta propia (falló la subida o la redacción), se guarda el motivo general (FR-19.6)
+    general = (results.get("buffer") or {}).get("message") or results.get("error") or "No hubo respuesta de la publicación."
     for p in platforms:
-        data.setdefault("platforms", {})[p] = {k: results.get(p, {}).get(k) for k in ("status", "post_id", "message")}
+        info = results.get(p) or {"status": "error", "message": general}
+        data.setdefault("platforms", {})[p] = {k: info.get(k) for k in ("status", "post_id", "message")}
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

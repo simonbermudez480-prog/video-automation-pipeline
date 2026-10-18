@@ -15,6 +15,9 @@ from pydantic import BaseModel, Field
 from src.config import settings
 from src.logger import logger
 
+# Origen de los últimos textos generados: "ia" o "plantilla" (si fallaron todos los modelos), para avisar en la interfaz
+LAST_COPY_SOURCE = "ia"
+
 
 class YouTubeShortsPost(BaseModel):
     title: str = Field(description="Título irresistible de menos de 60 caracteres que incluye al final '#Shorts'")
@@ -275,6 +278,8 @@ def generate_social_copy(
     Punto de entrada principal para generar los copies de todas las redes sociales.
     Intenta LLM seleccionado (Gemini o DeepSeek) y recurre automáticamente a plantilla optimizada ante cualquier eventualidad.
     """
+    global LAST_COPY_SOURCE
+    LAST_COPY_SOURCE = "ia"
     selected_provider = (provider or settings.LLM_PROVIDER).lower()
 
     if selected_provider == "deepseek" and settings.DEEPSEEK_API_KEY and settings.DEEPSEEK_API_KEY != "tu_clave_deepseek_aqui":
@@ -295,5 +300,6 @@ def generate_social_copy(
         except Exception as e:
             logger.warning("Fallo alternativo con DeepSeek para copies: {}", e)
 
-    logger.info("Utilizando generador de copies analítico de alta retención para: '{}'", topic)
+    logger.warning("Ningún modelo redactó los textos: se usa la plantilla automática para '{}'", topic)
+    LAST_COPY_SOURCE = "plantilla"
     return _generate_deterministic_social_fallback(topic, narration_summary)
