@@ -30,6 +30,7 @@ PLATFORM_NAMES = {"youtube": "YouTube", "instagram": "Instagram", "tiktok": "Tik
 STEPS = ["Guion", "Voz", "Subtítulos", "Imágenes", "Montaje", "Listo"]
 DURATIONS = {"1 min": "1.0", "1,5 min": "1.5", "2 min": "2.0", "2,5 min": "2.5", "3 min": "3.0"}
 LOW_DISK_GB = 3.0
+MIN_APPROVED_RATIO = 0.8  # por debajo, publicar pide una confirmación reforzada (FR-19.3)
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -106,6 +107,12 @@ def load_jobs() -> list[dict]:
 def _gate_passed(report: dict) -> bool:
     """True si el control de calidad aprobó el video (sin motivos de bloqueo)."""
     return not report.get("reasons") and report.get("status") in ("passed", "published")
+
+
+def approved_images(job: dict) -> tuple[int, int]:
+    """(imágenes aprobadas por la revisión visual, total de escenas) según el manifiesto del trabajo."""
+    scenes = _read_json(job["dir"] / "images" / "image_manifest.json").get("scenes", {})
+    return sum(1 for e in scenes.values() if e.get("audit") == "approved"), len(scenes)
 
 
 def load_queue() -> list[dict]:
@@ -572,9 +579,13 @@ class App(ctk.CTk):
             detail = f"Escenas unidas con la anterior: {', '.join(merged)}" if merged else "Todas las escenas tienen imagen aprobada."
         else:
             pill(status_row, "needs_review").pack(side="left")
-            detail = "Revísalo con cuidado antes de publicar. " + " ".join(report.get("reasons", []))
-        ctk.CTkLabel(status_row, text=detail, font=font(13), text_color=C["muted"], anchor="w", justify="left",
-                     wraplength=520).pack(side="left", padx=12)
+            approved, total = approved_images(job)
+            failing = ", ".join(str(s) for s in report.get("failing_scenes", []))
+            detail = (f"Solo {approved} de {total} imágenes pasaron la revisión visual"
+                      + (f" (fallan las escenas {failing})" if failing else "")
+                      + ". Usa «Reparar escenas» para buscar imágenes nuevas solo para esas escenas.")
+        ctk.CTkLabel(self.review_detail, text=detail, font=font(13), text_color=C["muted"], anchor="w", justify="left",
+                     wraplength=500).pack(fill="x", pady=(8, 0), **pad)
 
         question = (report.get("closing_question") or "").strip()
         if question:
@@ -604,13 +615,22 @@ class App(ctk.CTk):
 
         actions = ctk.CTkFrame(self.review_detail, fg_color="transparent")
         actions.pack(fill="x", pady=(18, 6), **pad)
-        self.publish_btn = button(actions, "Publicar en YouTube, Instagram y TikTok", self._publish_selected, "primary",
-                                  ICON["send"], height=42)
+        self.repair_btn = None
+        if _gate_passed(report):
+            self.publish_btn = button(actions, "Publicar en YouTube, Instagram y TikTok", self._publish_selected, "primary",
+                                      ICON["send"], height=42)
+        else:
+            # Sin control superado, lo recomendado es reparar; publicar queda como opción secundaria
+            self.repair_btn = button(actions, "Reparar escenas", self._repair_selected, "primary", height=42)
+            self.repair_btn.pack(side="left", padx=(0, 8))
+            self.publish_btn = button(actions, "Publicar igualmente", self._publish_selected, "secondary", ICON["send"], height=42)
         self.publish_btn.pack(side="left")
         button(actions, "Ver video", self._play_selected, "secondary", ICON["play"], height=42).pack(side="left", padx=8)
         button(actions, "Descartar", self._discard_selected, "danger", height=42).pack(side="left")
         if self.runner.busy:
             self.publish_btn.configure(state="disabled")
+            if self.repair_btn:
+                self.repair_btn.configure(state="disabled")
         self.review_msg = ctk.CTkLabel(self.review_detail, text="", font=font(13), text_color=C["muted"], anchor="w",
                                        justify="left", wraplength=640)
         self.review_msg.pack(fill="x", pady=(4, 18), **pad)
@@ -643,8 +663,32 @@ class App(ctk.CTk):
                                    f"Se publicará AHORA y de forma pública en YouTube, Instagram y TikTok:\n\n«{job['title']}»{warning}\n\n¿Publicar?",
                                    icon="warning"):
             return
+        approved, total = approved_images(job)
+        if total and approved / total < MIN_APPROVED_RATIO and not messagebox.askyesno(
+                "Pocas imágenes aprobadas",
+                f"Solo {approved} de {total} imágenes pasaron la revisión visual. Las demás pueden mostrar cosas que no "
+                "corresponden a la historia (objetos modernos, texto inventado…).\n\n"
+                "Recomendado: pulsa «No» y usa «Reparar escenas».\n\n¿Publicar de todas formas?",
+                icon="warning", default="no"):
+            return
         self._begin_task("publish", ["--publish-job", str(job["dir"])])
         self.review_msg.configure(text="Publicando… puede tardar unos minutos (se sube el video y se redactan los textos).",
+                                  text_color=C["accent_text"])
+
+    def _repair_selected(self):
+        job = self._selected_job()
+        if not job:
+            return
+        if self.runner.busy:
+            messagebox.showinfo("Espera un momento", "Ya hay una tarea en curso. Espera a que termine.")
+            return
+        approved, total = approved_images(job)
+        if not messagebox.askyesno("Reparar escenas",
+                                   f"Se buscarán imágenes nuevas solo para las escenas rechazadas ({total - approved} de {total}) "
+                                   "y se volverá a montar el video. Tarda unos 5–15 minutos y no publica nada.\n\n¿Reparar?"):
+            return
+        self._begin_task("repair", ["--repair-job", str(job["dir"])])
+        self.review_msg.configure(text="Reparando escenas… al terminar verás la hoja de contacto actualizada.",
                                   text_color=C["accent_text"])
 
     def _discard_selected(self):
@@ -902,7 +946,7 @@ class App(ctk.CTk):
         self.create_btn.configure(state="disabled")
         self.queue_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
-        labels = {"create": "Creando video…", "publish": "Publicando…", "queue": "Procesando la cola…"}
+        labels = {"create": "Creando video…", "publish": "Publicando…", "queue": "Procesando la cola…", "repair": "Reparando escenas…"}
         self.task_label.configure(text=icon_text(ICON["dot"], labels[kind]), text_color=C["accent_text"])
         self.task_bar.configure(mode="indeterminate")
         self.task_bar.start()
@@ -938,6 +982,13 @@ class App(ctk.CTk):
                 self.review_msg.configure(text=text, text_color=C["ok"] if ok else C["error"])
             self.history_msg.configure(text=text, text_color=C["ok"] if ok else C["error"])
             self.show_page(self.current_page)
+        elif kind == "repair":
+            text = {0: "Reparado: ahora supera el control de calidad. Revísalo y publícalo.",
+                    2: "Reparado en parte: sigue sin superar el control. Mira la hoja de contacto antes de decidir."}.get(
+                code, "La reparación se detuvo. Abre el registro técnico en «Crear video» para ver el motivo.")
+            self.show_page("review")
+            if hasattr(self, "review_msg") and self.review_msg.winfo_exists():
+                self.review_msg.configure(text=text, text_color=C["ok"] if code == 0 else C["warn"] if code == 2 else C["error"])
         elif kind == "queue":
             self.show_page("status")
         self._refresh_badges()
@@ -958,6 +1009,7 @@ class App(ctk.CTk):
                         self._set_step(n, "running")
                         self.progress.set(n / len(STEPS))
                         self.create_msg.configure(text=f"Paso {n + 1} de 6: {STEPS[n]}…", text_color=C["muted"])
+                if self.current_task in ("create", "repair"):
                     self._log(friendly(value))
         except queue.Empty:
             pass

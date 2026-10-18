@@ -625,6 +625,8 @@ _SOURCE_LIMITS = {
     "fal": 1, "imagen": 1, "pollinations": 2,
 }
 MAX_AUDIT_ROUNDS = 8  # cada ronda prueba un candidato por escena pendiente y cuesta una llamada de visión
+# "Reparar escenas" (FR-19.3): candidatos extra por fuente para escenas cuya búsqueda ya se agotó
+REPAIR_BONUS = {"wikimedia_topic": 2, "wikimedia_scene": 2, "openverse": 2, "pollinations": 3}
 
 FetchFn = Callable[[Path, int], Optional[dict]]
 
@@ -715,7 +717,7 @@ def _fetch_next_candidate(state: dict, output_path: Path) -> Optional[str]:
     while state["pos"] < len(plan):
         name, fetch = plan[state["pos"]]
         tries = state["tries"].get(name, 0)
-        if tries >= _SOURCE_LIMITS[name]:
+        if tries >= _SOURCE_LIMITS[name] + state.get("bonus", {}).get(name, 0):
             state["pos"] += 1
             continue
         state["tries"][name] = tries + 1
@@ -742,8 +744,11 @@ def generate_images_for_scenes(
     topic: Optional[str] = None,
     aspect_ratio: str = "16:9",
     visual_contract: Optional[object] = None,
+    repair: bool = False,
 ) -> List[Path]:
     """
+    Con repair=True solo se rehacen las escenas no aprobadas: su búsqueda se reabre desde la primera fuente
+    (sin repetir candidatos ya probados) con los intentos extra de REPAIR_BONUS.
     Obtiene una imagen por escena en assets/images/scene_{idx:03d}.png (16:9 o 9:16):
     1. Reutiliza imágenes en caché solo si el prompt de la escena no cambió (firma por escena).
     2. Descarga candidatos de la cascada de fuentes sin auditar.
@@ -804,6 +809,8 @@ def generate_images_for_scenes(
             state["pos"] = names.index(saved["source"]) if saved.get("source") in names else 0
             state["tries"] = dict(saved.get("tries", {}))
             state["meta"] = entries[idx].get("credit")
+            if repair:
+                state["pos"], state["bonus"] = 0, REPAIR_BONUS
         states[idx] = state
 
     def _fetch_worker(idx: int) -> tuple[int, Optional[str]]:

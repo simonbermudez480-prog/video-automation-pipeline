@@ -171,8 +171,8 @@
     - [x] 22.1 Borrar `temp` de cada trabajo al terminar bien (FR-19.1). *Hecho 2026-10-18: `assemble_video` borra `clip_*.mp4` y el `.ass` al terminar (738 MB por video); verificado re-montando Reckless.*
     - [x] 22.2 Carpeta de trabajo fuera de OneDrive (`WORK_DIR`) con migración (FR-19.2). *Hecho 2026-10-18: `WORK_DIR` en `.env` → `jobs/`, `temp/`, `output/`; `mover_carpeta_trabajo.py` movió 28 trabajos y `output` a `C:\Users\simon\VideosEducativos_trabajo`, corrigió 51 JSON y liberó 2,37 GB (incluye el clon viejo del CDN); aviso en el diagnóstico de la interfaz.*
   - **Bloque 2 · Lo que se publica**
-    - [ ] 22.3 "Reparar escenas" y confirmación reforzada con <80 % aprobadas (FR-19.3).
-    - [ ] 22.4 Limpieza del tema de entrada (FR-19.4).
+    - [x] 22.3 "Reparar escenas" y confirmación reforzada con <80 % aprobadas (FR-19.3). *Hecho 2026-10-18: `main.py --repair-job` reabre la búsqueda solo de las escenas no aprobadas con candidatos extra (`REPAIR_BONUS`), vuelve a pasar el control, re-monta en el mismo archivo, borra el `_web.mp4` viejo y actualiza el reporte (salida 0 = supera, 2 = en parte). Interfaz: «Reparar escenas» como acción principal si el control falla, «Publicar igualmente» secundaria y segundo aviso (por defecto «No») con <80 % aprobadas. Prueba con copia de Guam: 6 → 8 de 13 aprobadas en ~24 min; Pollinations sin saldo (HTTP 402) limitó el resultado. Capturas: `screenshots/fase22_review_antes.png` y `_despues.png`.*
+    - [x] 22.4 Limpieza del tema de entrada (FR-19.4). *Hecho 2026-10-18: `clean_topic` en `extract_topics` quita "3. ", "2) ", "- ", ". ", viñetas y comillas; respeta "3.5 millones", "1914-1918" y "1932: …".*
   - **Bloque 3 · Red de seguridad**
     - [ ] 22.5 Pruebas automáticas sin internet (FR-19.5).
     - [ ] 22.6 Errores visibles en la interfaz (FR-19.6).

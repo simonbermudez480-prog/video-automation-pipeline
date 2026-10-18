@@ -77,6 +77,13 @@ def clean_temp_workspace(clean_images: bool = True, clean_audio: bool = False, c
                     logger.warning("No se pudo eliminar {}: {}", item.name, e)
 
 
+def clean_topic(text: str) -> str:
+    """Quita restos de listas al inicio del tema ("3. ", "2) ", "- ", ". ") y comillas o espacios sobrantes (FR-19.4)."""
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^(?:\d{1,3}\s*[.)\-:–—](?!\d)\s*|[-–—•*·.,;:]+\s*)+", "", text)
+    return text.strip(" \"'«»“”").strip()
+
+
 def extract_topics(args: argparse.Namespace) -> List[str]:
     """Extrae y normaliza la lista de temas desde --topic y/o --topics-file."""
     raw_topics = []
@@ -100,9 +107,9 @@ def extract_topics(args: argparse.Namespace) -> List[str]:
         items = topic_arg if isinstance(topic_arg, list) else [topic_arg]
         raw_topics.extend(t.strip() for t in items if t and t.strip())
 
-    # 3. Eliminar duplicados manteniendo orden de inserción
+    # 3. Limpiar restos de listas copiadas y eliminar duplicados manteniendo orden de inserción
     unique_topics = []
-    for t in raw_topics:
+    for t in filter(None, map(clean_topic, raw_topics)):
         if t not in unique_topics:
             unique_topics.append(t)
 
@@ -178,6 +185,66 @@ def save_publication(job_dir: Path, platforms: List[str], results: Optional[dict
     for p in platforms:
         data.setdefault("platforms", {})[p] = {k: results.get(p, {}).get(k) for k in ("status", "post_id", "message")}
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def repair_job(job_dir: Path) -> bool:
+    """
+    Reparar escenas (FR-19.3): rehace solo las imágenes no aprobadas de un video ya producido, vuelve a pasar el
+    control de calidad y re-monta el video en el mismo archivo. Retorna True si ahora supera el control.
+    """
+    report_path = job_dir / "quality_report.json"
+    script_path = job_dir / "aligned_scenes.json"
+    if not report_path.exists() or not script_path.exists():
+        logger.error("La carpeta {} no tiene reporte o guion alineado; no se puede reparar.", job_dir)
+        return False
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    script = ScriptOutput(**json.loads(script_path.read_text(encoding="utf-8")))
+    images_dir = job_dir / "images"
+    manifest = load_manifest(images_dir)
+    aspect_ratio = manifest.get("aspect_ratio") or "9:16"
+    before = sum(1 for e in manifest["scenes"].values() if e.get("audit") == "approved")
+    logger.info(">>> Reparando escenas de '{}' ({}/{} imágenes aprobadas)...", report.get("topic"), before, len(script.scenes))
+
+    image_paths = generate_images_for_scenes(
+        scenes=script.scenes,
+        output_dir=images_dir,
+        topic=manifest.get("topic") or report.get("topic"),
+        aspect_ratio=aspect_ratio,
+        visual_contract=script.visual_contract,
+        repair=True,
+    )
+    video_path = Path(report["video_path"])
+    gate = run_quality_gate(image_paths, Path(report.get("contact_sheet") or OUTPUT_DIR / "review" / f"{video_path.stem}_contact.png"))
+    after = sum(1 for e in load_manifest(images_dir)["scenes"].values() if e.get("audit") == "approved")
+
+    scenes, images = apply_scene_merges(script.scenes, image_paths, gate.merges)
+    assemble_video(
+        scenes=scenes,
+        image_paths=images,
+        audio_path=job_dir / "audio" / "narration.mp3",
+        subtitles_path=job_dir / "subtitles" / "subtitles.srt",
+        output_video_path=video_path,
+        burn_subtitles=True,
+        aspect_ratio=aspect_ratio,
+        temp_dir=job_dir / "temp",
+        look=choose_look(script.visual_contract),
+        hook_text=hook_for(script),
+        closing_question=script.closing_question,
+        opening_image=choose_opening_image(image_paths, load_manifest(images_dir), gate.merges),
+    )
+    # La versión optimizada para subir era del video anterior: se borra para que se rehaga al publicar
+    (video_path.parent / f"{video_path.stem}_web.mp4").unlink(missing_ok=True)
+
+    report.update(
+        status="passed" if gate.passed else "needs_review",
+        reasons=gate.reasons,
+        failing_scenes=sorted(gate.failing_scenes),
+        merged_scenes={str(k): v for k, v in sorted(gate.merges.items())},
+        repaired_at=datetime.now().isoformat(timespec="seconds"),
+    )
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("Reparación terminada: {} -> {} de {} imágenes aprobadas.", before, after, len(script.scenes))
+    return gate.passed
 
 
 def publish_job(job_dir: Path, platforms: List[str], privacy: Optional[str], llm_provider: Optional[str]) -> bool:
@@ -710,6 +777,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Procesar la cola de publicación diferida (output/queue/): re-auditar, re-montar y publicar lo que pase el control",
     )
     parser.add_argument(
+        "--repair-job",
+        type=str,
+        default=None,
+        metavar="CARPETA",
+        help="Rehacer solo las escenas rechazadas de un video ya producido y volver a montarlo (usado por la interfaz)",
+    )
+    parser.add_argument(
         "--publish-job",
         type=str,
         default=None,
@@ -754,6 +828,8 @@ def main() -> None:
         if args.process_queue:
             process_queue(publish_queued, require_approval=args.require_approval)
             return
+        if args.repair_job:
+            sys.exit(0 if repair_job(Path(args.repair_job)) else 2)
         if args.publish_job:
             platforms = [p.lower() for p in args.publish_platforms] if args.publish_platforms else ["youtube", "instagram", "tiktok"]
             ok = publish_job(Path(args.publish_job), platforms, args.privacy, args.llm_provider)
