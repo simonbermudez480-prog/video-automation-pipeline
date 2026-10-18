@@ -168,15 +168,17 @@ def publish_social(
 
 
 def save_publication(job_dir: Path, platforms: List[str], results: Optional[dict]) -> None:
-    """Guarda en publication.json el resultado de la publicación (IDs de Buffer) para el historial."""
+    """
+    Guarda en publication.json el resultado de la publicación (IDs de Buffer) para el historial.
+    Solo reemplaza las plataformas publicadas ahora: las demás conservan su registro y sus enlaces.
+    """
     results = results or {}
-    data = {
-        "published_at": datetime.now().isoformat(timespec="seconds"),
-        "platforms": {
-            p: {k: results.get(p, {}).get(k) for k in ("status", "post_id", "message")} for p in platforms
-        },
-    }
-    (job_dir / "publication.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path = job_dir / "publication.json"
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"platforms": {}}
+    data["published_at"] = datetime.now().isoformat(timespec="seconds")
+    for p in platforms:
+        data.setdefault("platforms", {})[p] = {k: results.get(p, {}).get(k) for k in ("status", "post_id", "message")}
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def publish_job(job_dir: Path, platforms: List[str], privacy: Optional[str], llm_provider: Optional[str]) -> bool:

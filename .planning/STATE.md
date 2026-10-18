@@ -2,7 +2,7 @@
 
 ## Status
 - **Current Phase:** Phase 15 (Pre-Publish Quality Gate) — Complete (sin commit). Phase 16 (Free Hybrid Visual Pipeline) — siguiente.
-- **Active Task:** Fase 20 tareas 20.1–20.5 terminadas y verificadas (sin commit). Pendiente 20.6: medir en TikTok Studio 3–5 videos nuevos contra la línea base (se van en 0:02, 45,3 s de media, 19,7 % completo).
+- **Active Task:** Fase 21 terminada y verificada (sin commit). 5 videos sin Instagram por el primer comentario (plan gratuito de Buffer): Oreja de Jenkins, Karánsebes, Tres Reyes, Guam, Sargento Reckless; se pueden reintentar desde Historial. Fase 20.6 (medición) sigue pendiente.
 - **Fase 15 — resultado clave:** con el control activo, las fuentes gratuitas actuales (Pexels/Wikimedia con búsqueda simple) solo consiguen 4/13 imágenes válidas para el Emú (1932): casi todo el stock es moderno. El bloqueo funciona; lo que falta es mejor búsqueda de archivo (Fase 16). Nuevo módulo `src/quality_gate.py`; publicar ahora pide confirmación humana por defecto (`--no-approval` para automatizar) y deja `quality_report.json` en la carpeta del job y la hoja de contacto en `output/review/`.
 - **Riesgo:** la cuota gratuita de visión por modelo es pequeña (2 modelos se agotaron en 4 llamadas el 2026-10-15). Si se agota, las escenas quedan `unaudited` y la publicación se bloquea.
 - **Next Actions:**

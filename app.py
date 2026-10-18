@@ -1,7 +1,8 @@
 """
-Interfaz de escritorio de Videos Educativos (Fase 18 / FR-15).
+Interfaz de escritorio de Videos Educativos (Fases 18 y 21).
 Permite crear, revisar, publicar y seguir videos sin usar comandos.
 Se abre con doble clic en Abrir_Videos_Educativos.bat. Por debajo ejecuta main.py.
+Diseño oscuro con CustomTkinter; tokens inspirados en el DESIGN.md de Linear (un solo acento, grises fríos).
 """
 import json
 import os
@@ -14,11 +15,10 @@ import threading
 import webbrowser
 from datetime import datetime
 from pathlib import Path
-import tkinter as tk
-from tkinter import messagebox, ttk
-from tkinter.scrolledtext import ScrolledText
+from tkinter import messagebox
 
-from PIL import Image, ImageTk
+import customtkinter as ctk
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
 JOBS_DIR = ROOT / "assets" / "jobs"
@@ -26,18 +26,38 @@ QUEUE_DIR = ROOT / "output" / "queue"
 PLATFORMS = ("youtube", "instagram", "tiktok")
 PLATFORM_NAMES = {"youtube": "YouTube", "instagram": "Instagram", "tiktok": "TikTok"}
 STEPS = ["Guion", "Voz", "Subtítulos", "Imágenes", "Montaje", "Listo"]
+DURATIONS = {"1 min": "1.0", "1,5 min": "1.5", "2 min": "2.0", "2,5 min": "2.5", "3 min": "3.0"}
 LOW_DISK_GB = 3.0
-
-COLORS = {
-    "bg": "#F4F6F8", "card": "#FFFFFF", "text": "#1A1A1A", "muted": "#4A5560",
-    "primary": "#1F5FBF", "primary_dark": "#174A96", "ok": "#1E7D32", "warn": "#B45309", "error": "#B3261E",
-}
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-STATUS_LABELS = {
-    "passed": "Listo para publicar", "needs_review": "No superó el control", "queued": "En cola",
-    "published": "Publicado", "publish_failed": "Error al publicar", "discarded": "Descartado",
+# Tokens de diseño (contraste comprobado: texto 15,7:1, texto secundario 7,7:1, botón principal 7,0:1)
+C = {
+    "canvas": "#0B0C0E", "sidebar": "#101114", "surface": "#141518", "surface2": "#1B1D21", "surface3": "#22252A",
+    "hairline": "#24262B", "hairline2": "#33363D",
+    "ink": "#EDEEF0", "muted": "#A3A9B3",
+    "accent": "#434EB5", "accent_hover": "#5560C9", "accent_text": "#A1A9FF",
+    "ok": "#4ADE80", "warn": "#FBBF24", "error": "#FF8A8A",
+    "ok_bg": "#13261A", "warn_bg": "#2A2210", "error_bg": "#2C1517", "accent_bg": "#1C1F3A",
+}
+FONT = "Segoe UI"
+FONT_SEMI = "Segoe UI Semibold"
+ICONS_FONT = "Segoe MDL2 Assets"
+ICON = {
+    "create": "", "review": "", "history": "", "status": "", "play": "",
+    "send": "", "copy": "", "refresh": "", "folder": "", "check": "",
+    "error": "", "warn": "", "close": "", "link": "", "dot": "",
+}
+
+STATUS = {  # estado: (texto, color de texto, fondo de la píldora)
+    "passed": ("Listo para publicar", C["ok"], C["ok_bg"]),
+    "needs_review": ("No superó el control", C["warn"], C["warn_bg"]),
+    "queued": ("En cola", C["accent_text"], C["accent_bg"]),
+    "published": ("Publicado", C["ok"], C["ok_bg"]),
+    "partial": ("Publicado con errores", C["warn"], C["warn_bg"]),
+    "publish_failed": ("Error al publicar", C["error"], C["error_bg"]),
+    "discarded": ("Descartado", C["muted"], C["surface2"]),
+    "": ("Sin revisar", C["muted"], C["surface2"]),
 }
 
 
@@ -52,6 +72,14 @@ def _read_json(path: Path) -> dict:
         return {}
 
 
+def publication_status(publication: dict) -> str:
+    """'published' si todas las plataformas salieron, 'partial' si alguna falló, 'publish_failed' si ninguna, '' si no hay datos."""
+    states = [i.get("status") == "success" for i in publication.get("platforms", {}).values()]
+    if not states:
+        return ""
+    return "published" if all(states) else ("partial" if any(states) else "publish_failed")
+
+
 def load_jobs() -> list[dict]:
     """Trabajos producidos (carpetas de assets/jobs con reporte de calidad o publicación), del más nuevo al más viejo."""
     jobs = []
@@ -62,10 +90,12 @@ def load_jobs() -> list[dict]:
             continue
         script = _read_json(d / "script.json")
         title = report.get("title") or script.get("metadata", {}).get("title") or d.name
+        title = re.sub(r"\s*\|?\s*#\w+", "", title)
+        title = "".join(ch for ch in title if ord(ch) <= 0xFFFF and not 0x2600 <= ord(ch) <= 0x27BF and ord(ch) != 0xFE0F).strip()
         status = report.get("status", "")
-        sent = [i.get("status") == "success" for i in publication.get("platforms", {}).values()]
-        if status != "discarded" and sent:
-            status = "published" if any(sent) else "publish_failed"
+        pub_status = publication_status(publication)
+        if status != "discarded" and pub_status:
+            status = pub_status
         created = report.get("created_at") or datetime.fromtimestamp(d.stat().st_mtime).isoformat(timespec="seconds")
         jobs.append({"dir": d, "title": title, "status": status, "created": created, "report": report, "publication": publication})
     return sorted(jobs, key=lambda j: j["created"], reverse=True)
@@ -107,17 +137,23 @@ def free_disk_gb() -> float:
     return shutil.disk_usage(ROOT).free / 1024 ** 3
 
 
-def fetch_pollen_balance() -> str:
+def disk_usage_ratio() -> float:
+    usage = shutil.disk_usage(ROOT)
+    return usage.used / usage.total
+
+
+def fetch_pollen_balance() -> tuple[float, str]:
     import requests
     from src.config import settings
     key = getattr(settings, "POLLINATIONS_API_KEY", "") or (
         settings.IMAGE_API_KEY if settings.IMAGE_API_KEY and not settings.IMAGE_API_KEY.startswith("tu_clave") else ""
     )
     if not key:
-        return "sin clave configurada"
+        return -1.0, "Sin clave configurada"
     data = requests.get("https://gen.pollinations.ai/account/balance", headers={"Authorization": f"Bearer {key}"}, timeout=20).json()
+    balance = float(data.get("balance", 0))
     paid = data.get("accountBalance", {}).get("paid", 0)
-    return f"{data.get('balance', 0):.3f} Pollen (≈{int(data.get('balance', 0) / 0.002)} imágenes)" + (f", pagado {paid}" if paid else "")
+    return balance, f"≈ {int(balance / 0.002)} imágenes" + (f" · pagado {paid}" if paid else " · saldo gratuito")
 
 
 def refresh_links(jobs: list[dict]) -> int:
@@ -143,6 +179,18 @@ def refresh_links(jobs: list[dict]) -> int:
         if changed:
             (job["dir"] / "publication.json").write_text(json.dumps(pub, ensure_ascii=False, indent=2), encoding="utf-8")
     return found
+
+
+def friendly_error(message: str) -> str:
+    """Explica en español los errores frecuentes de publicación."""
+    m = (message or "").lower()
+    if "first comment requires a paid plan" in m:
+        return "Buffer no permite el primer comentario en el plan gratuito. Ya está corregido: reintenta para publicarlo."
+    if "could not be read from its url" in m:
+        return "Buffer no pudo leer el video. Revisa tu conexión y el espacio en disco, y reintenta."
+    if "not_connected" in m or "no conectad" in m:
+        return "La cuenta no está conectada en Buffer."
+    return message or "Error desconocido."
 
 
 # ---------------------------------------------------------------------------
@@ -189,104 +237,240 @@ def friendly(line: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Componentes visuales
+# ---------------------------------------------------------------------------
+
+def font(size: int = 13, semibold: bool = False) -> tuple:
+    return (FONT_SEMI if semibold else FONT, size)
+
+
+def card(parent, **kw) -> ctk.CTkFrame:
+    return ctk.CTkFrame(parent, fg_color=C["surface"], border_color=C["hairline"], border_width=1, corner_radius=12, **kw)
+
+
+def pill(parent, status: str) -> ctk.CTkLabel:
+    text, color, bg = STATUS.get(status, STATUS[""])
+    return ctk.CTkLabel(parent, text=f"  {text}  ", font=font(12, True), text_color=color, fg_color=bg, corner_radius=6, height=24)
+
+
+def button(parent, text: str, command, kind: str = "secondary", icon: str = "", **kw) -> ctk.CTkButton:
+    styles = {
+        "primary": dict(fg_color=C["accent"], hover_color=C["accent_hover"], text_color="#FFFFFF", border_width=0),
+        "secondary": dict(fg_color=C["surface2"], hover_color=C["surface3"], text_color=C["ink"], border_width=1, border_color=C["hairline2"]),
+        "ghost": dict(fg_color="transparent", hover_color=C["surface2"], text_color=C["muted"], border_width=0),
+        "danger": dict(fg_color="transparent", hover_color=C["error_bg"], text_color=C["error"], border_width=0),
+    }
+    label = f"{icon}  {text}" if icon else text
+    return ctk.CTkButton(parent, text=label, command=command, corner_radius=8, height=kw.pop("height", 38),
+                         font=kw.pop("font", font(13, kind == "primary")), **styles[kind], **kw)
+
+
+def icon_text(icon: str, text: str) -> str:
+    return f"{icon}  {text}"
+
+
+# ---------------------------------------------------------------------------
 # Ventana
 # ---------------------------------------------------------------------------
 
-class App(tk.Tk):
+class App(ctk.CTk):
+    PAGES = (("create", "Crear video"), ("review", "Revisar y publicar"), ("history", "Historial"), ("status", "Estado"))
+
     def __init__(self):
-        super().__init__()
+        ctk.set_appearance_mode("dark")
+        super().__init__(fg_color=C["canvas"])
         self.title("Videos Educativos")
-        self.geometry("1180x800")
-        self.minsize(1000, 700)
-        self.configure(bg=COLORS["bg"])
+        self.geometry("1280x840")
+        self.minsize(1120, 740)
         self.runner = PipelineRunner()
         self.current_task = None  # "create" | "publish" | "queue"
-        self._photo = None
-        self._setup_style()
+        self.current_page = "create"
+        self.selected_review = None
+        self.review_jobs: dict[str, dict] = {}
+        self._sheet_image = None
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        header = tk.Frame(self, bg=COLORS["primary"])
-        header.pack(fill="x")
-        tk.Label(header, text="Videos Educativos", font=("Segoe UI", 18, "bold"), fg="white", bg=COLORS["primary"]).pack(side="left", padx=20, pady=12)
-        self.header_status = tk.Label(header, text="", font=("Segoe UI", 11), fg="white", bg=COLORS["primary"])
-        self.header_status.pack(side="right", padx=20)
-
-        self.tabs = ttk.Notebook(self)
-        self.tabs.pack(fill="both", expand=True, padx=12, pady=12)
-        self._build_create_tab()
-        self._build_review_tab()
-        self._build_history_tab()
-        self._build_status_tab()
-        self.tabs.bind("<<NotebookTabChanged>>", lambda e: self.refresh_all())
-        self.refresh_all()
+        self._build_sidebar()
+        self.main = ctk.CTkFrame(self, fg_color=C["canvas"], corner_radius=0)
+        self.main.grid(row=0, column=1, sticky="nsew")
+        self.main.grid_columnconfigure(0, weight=1)
+        self.main.grid_rowconfigure(0, weight=1)
+        self.pages = {
+            "create": self._build_create_page(),
+            "review": self._build_review_page(),
+            "history": self._build_history_page(),
+            "status": self._build_status_page(),
+        }
+        self.show_page("create")
         self.after(200, self._poll_runner)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def _setup_style(self):
-        s = ttk.Style(self)
-        s.theme_use("clam")
-        base = ("Segoe UI", 11)
-        s.configure(".", font=base, background=COLORS["bg"], foreground=COLORS["text"])
-        s.configure("TNotebook", background=COLORS["bg"], borderwidth=0)
-        s.configure("TNotebook.Tab", font=("Segoe UI", 12, "bold"), padding=(18, 8), foreground=COLORS["text"])
-        s.map("TNotebook.Tab", background=[("selected", COLORS["card"])], foreground=[("selected", COLORS["primary"])])
-        s.configure("Card.TFrame", background=COLORS["card"])
-        s.configure("Card.TLabel", background=COLORS["card"], foreground=COLORS["text"])
-        s.configure("Muted.TLabel", background=COLORS["card"], foreground=COLORS["muted"])
-        s.configure("Title.TLabel", background=COLORS["card"], foreground=COLORS["text"], font=("Segoe UI", 15, "bold"))
-        s.configure("Primary.TButton", font=("Segoe UI", 12, "bold"), foreground="white", background=COLORS["primary"], padding=(16, 10))
-        s.map("Primary.TButton", background=[("active", COLORS["primary_dark"]), ("disabled", "#9AA5B1")])
-        s.configure("TButton", padding=(12, 8))
-        s.configure("Horizontal.TProgressbar", background=COLORS["primary"], troughcolor="#E3E8EE", bordercolor="#E3E8EE",
-                    lightcolor=COLORS["primary"], darkcolor=COLORS["primary"], thickness=14)
-        s.configure("Treeview", font=("Segoe UI", 11), rowheight=30, background=COLORS["card"], fieldbackground=COLORS["card"])
-        s.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
+    # ---------------- Menú lateral ----------------
+    def _build_sidebar(self):
+        side = ctk.CTkFrame(self, fg_color=C["sidebar"], corner_radius=0, width=244)
+        side.grid(row=0, column=0, sticky="nsw")
+        side.grid_propagate(False)
+        brand = ctk.CTkFrame(side, fg_color="transparent")
+        brand.pack(fill="x", padx=20, pady=(24, 28))
+        ctk.CTkLabel(brand, text="", font=(ICONS_FONT, 18), text_color="#FFFFFF", fg_color=C["accent"],
+                     corner_radius=8, width=36, height=36).pack(side="left")
+        names = ctk.CTkFrame(brand, fg_color="transparent")
+        names.pack(side="left", padx=12)
+        ctk.CTkLabel(names, text="Videos Educativos", font=font(15, True), text_color=C["ink"], anchor="w").pack(anchor="w")
+        ctk.CTkLabel(names, text="Historia y cultura", font=font(12), text_color=C["muted"], anchor="w").pack(anchor="w")
 
-    def _card(self, parent) -> ttk.Frame:
-        frame = ttk.Frame(parent, style="Card.TFrame", padding=20)
-        frame.pack(fill="both", expand=True)
-        return frame
+        self.nav = {}
+        for key, label in self.PAGES:
+            row = ctk.CTkFrame(side, fg_color="transparent", corner_radius=8, height=42)
+            row.pack(fill="x", padx=12, pady=2)
+            row.pack_propagate(False)
+            indicator = ctk.CTkFrame(row, fg_color="transparent", width=3, corner_radius=2)
+            indicator.pack(side="left", fill="y", pady=8)
+            btn = ctk.CTkButton(row, text=icon_text(ICON[key], label), anchor="w", command=lambda k=key: self.show_page(k),
+                                fg_color="transparent", hover_color=C["surface2"], text_color=C["muted"],
+                                font=font(13), corner_radius=8, height=40)
+            btn.pack(side="left", fill="both", expand=True, padx=(4, 0))
+            badge = ctk.CTkLabel(row, text="", font=font(11, True), text_color="#FFFFFF", fg_color="transparent",
+                                 corner_radius=9, width=22, height=18)
+            badge.place(relx=1.0, rely=0.5, x=-12, anchor="e")
+            self.nav[key] = (row, indicator, btn, badge)
 
-    # ---------------- Pestaña 1: Crear video ----------------
-    def _build_create_tab(self):
-        tab = ttk.Frame(self.tabs)
-        self.tabs.add(tab, text="1. Crear video")
-        card = self._card(tab)
-        ttk.Label(card, text="¿Sobre qué tema quieres el video?", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(card, text="Escribe el tema con tus palabras, por ejemplo: La explosión de Chernóbil (1986)", style="Muted.TLabel").pack(anchor="w", pady=(2, 8))
-        self.topic_var = tk.StringVar()
-        entry = ttk.Entry(card, textvariable=self.topic_var, font=("Segoe UI", 14))
-        entry.pack(fill="x", ipady=6)
-        entry.bind("<Return>", lambda e: self.start_create())
+        task = ctk.CTkFrame(side, fg_color=C["surface"], border_color=C["hairline"], border_width=1, corner_radius=10)
+        task.pack(side="bottom", fill="x", padx=12, pady=16)
+        self.task_label = ctk.CTkLabel(task, text=icon_text(ICON["dot"], "Sin tareas en curso"), font=font(12),
+                                       text_color=C["muted"], anchor="w", justify="left", wraplength=190)
+        self.task_label.pack(fill="x", padx=12, pady=(10, 6))
+        self.task_bar = ctk.CTkProgressBar(task, height=4, corner_radius=2, fg_color=C["surface2"], progress_color=C["accent_text"])
+        self.task_bar.set(0)
+        self.task_bar.pack(fill="x", padx=12, pady=(0, 12))
 
-        row = ttk.Frame(card, style="Card.TFrame")
-        row.pack(fill="x", pady=12)
-        ttk.Label(row, text="Duración aproximada:", style="Card.TLabel").pack(side="left")
-        self.duration_var = tk.StringVar(value="2.5")
-        ttk.Spinbox(row, from_=1.0, to=3.0, increment=0.5, textvariable=self.duration_var, width=5, font=("Segoe UI", 12)).pack(side="left", padx=8)
-        ttk.Label(row, text="minutos", style="Card.TLabel").pack(side="left")
-        self.cancel_btn = ttk.Button(row, text="Cancelar", command=self.cancel_task, state="disabled")
-        self.cancel_btn.pack(side="right")
-        self.create_btn = ttk.Button(row, text="Crear video", style="Primary.TButton", command=self.start_create)
-        self.create_btn.pack(side="right", padx=8)
+    def show_page(self, key: str):
+        self.current_page = key
+        for k, (row, indicator, btn, _) in self.nav.items():
+            active = k == key
+            row.configure(fg_color=C["surface2"] if active else "transparent")
+            indicator.configure(fg_color=C["accent_text"] if active else "transparent")
+            btn.configure(text_color=C["ink"] if active else C["muted"], font=font(13, active),
+                          hover_color=C["surface2"] if not active else C["surface3"])
+        for k, page in self.pages.items():
+            if k == key:
+                page.grid(row=0, column=0, sticky="nsew")
+            else:
+                page.grid_forget()
+        {"review": self._refresh_review, "history": self._refresh_history, "status": self._refresh_status}.get(key, lambda: None)()
+        self._refresh_badges()
 
-        steps = ttk.Frame(card, style="Card.TFrame")
-        steps.pack(fill="x", pady=(8, 4))
-        self.step_labels = []
-        for name in STEPS:
-            lbl = tk.Label(steps, text=f"○  {name}", font=("Segoe UI", 12), bg=COLORS["card"], fg=COLORS["muted"], padx=10)
-            lbl.pack(side="left")
-            self.step_labels.append(lbl)
-        self.progress = ttk.Progressbar(card, mode="indeterminate")
-        self.progress.pack(fill="x", pady=8)
-        self.create_msg = ttk.Label(card, text="Tarda unos 15–20 minutos. Puedes seguir usando las otras pestañas mientras tanto.", style="Muted.TLabel")
-        self.create_msg.pack(anchor="w")
-        self.log = ScrolledText(card, height=14, font=("Consolas", 10), bg="#0F1720", fg="#E6EDF3", insertbackground="white", state="disabled", relief="flat")
-        self.log.pack(fill="both", expand=True, pady=(8, 0))
+    def _refresh_badges(self):
+        jobs = load_jobs()
+        pending = sum(1 for j in jobs if j["status"] in ("passed", "needs_review"))
+        problems = sum(1 for j in jobs if j["status"] in ("partial", "publish_failed"))
+        issues = sum(1 for _, ok, req, _ in run_diagnostics() if req and not ok) + (1 if free_disk_gb() < LOW_DISK_GB else 0)
+        for key, count, color in (("review", pending, C["accent"]), ("history", problems, "#9A3B3B"), ("status", issues, "#9A3B3B")):
+            badge = self.nav[key][3]
+            badge.configure(text=str(count) if count else "", fg_color=color if count else "transparent")
+
+    def _page(self, title: str, subtitle: str) -> tuple[ctk.CTkFrame, ctk.CTkFrame]:
+        page = ctk.CTkFrame(self.main, fg_color=C["canvas"], corner_radius=0)
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(1, weight=1)
+        head = ctk.CTkFrame(page, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=36, pady=(30, 18))
+        ctk.CTkLabel(head, text=title, font=font(24, True), text_color=C["ink"], anchor="w").pack(anchor="w")
+        ctk.CTkLabel(head, text=subtitle, font=font(13), text_color=C["muted"], anchor="w").pack(anchor="w", pady=(2, 0))
+        body = ctk.CTkFrame(page, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="nsew", padx=36, pady=(0, 30))
+        return page, body
+
+    # ---------------- Crear video ----------------
+    def _build_create_page(self):
+        page, body = self._page("Crear video", "Escribe un tema y el programa hace el guion, la voz, las imágenes y el montaje.")
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(1, weight=1)
+
+        form = card(body)
+        form.grid(row=0, column=0, sticky="ew")
+        ctk.CTkLabel(form, text="Tema del video", font=font(14, True), text_color=C["ink"], anchor="w").pack(anchor="w", padx=24, pady=(22, 8))
+        self.topic_entry = ctk.CTkEntry(form, height=48, font=font(15), fg_color=C["surface2"], border_color=C["hairline2"],
+                                        border_width=1, corner_radius=8, text_color=C["ink"],
+                                        placeholder_text="Ej.: La explosión de Chernóbil (1986)", placeholder_text_color="#7C828C")
+        self.topic_entry.pack(fill="x", padx=24)
+        self.topic_entry.bind("<Return>", lambda e: self.start_create())
+        row = ctk.CTkFrame(form, fg_color="transparent")
+        row.pack(fill="x", padx=24, pady=(16, 22))
+        ctk.CTkLabel(row, text="Duración", font=font(13), text_color=C["muted"]).pack(side="left", padx=(0, 12))
+        self.duration_seg = ctk.CTkSegmentedButton(row, values=list(DURATIONS), font=font(12, True), height=34,
+                                                   fg_color=C["surface2"], selected_color=C["accent"],
+                                                   selected_hover_color=C["accent_hover"], unselected_color=C["surface2"],
+                                                   unselected_hover_color=C["surface3"], text_color=C["ink"], corner_radius=8)
+        self.duration_seg.set("2,5 min")
+        self.duration_seg.pack(side="left")
+        self.create_btn = button(row, "Crear video", self.start_create, "primary", ICON["create"], width=170, height=42)
+        self.create_btn.pack(side="right")
+        self.cancel_btn = button(row, "Cancelar", self.cancel_task, "ghost", height=42, state="disabled")
+        self.cancel_btn.pack(side="right", padx=8)
+
+        prog = card(body)
+        prog.grid(row=1, column=0, sticky="nsew", pady=(16, 0))
+        top = ctk.CTkFrame(prog, fg_color="transparent")
+        top.pack(fill="x", padx=24, pady=(20, 4))
+        ctk.CTkLabel(top, text="Progreso", font=font(14, True), text_color=C["ink"]).pack(side="left")
+        self.create_status = ctk.CTkLabel(top, text="Sin tareas", font=font(13), text_color=C["muted"])
+        self.create_status.pack(side="right")
+        steps = ctk.CTkFrame(prog, fg_color="transparent")
+        steps.pack(fill="x", padx=24, pady=(14, 10))
+        self.step_widgets = []
+        for i, name in enumerate(STEPS):
+            steps.grid_columnconfigure(i, weight=1)
+            cell = ctk.CTkFrame(steps, fg_color=C["surface2"], corner_radius=8, height=56)
+            cell.grid(row=0, column=i, sticky="ew", padx=(0 if i == 0 else 6, 0))
+            icon = ctk.CTkLabel(cell, text=str(i + 1), font=font(12, True), text_color=C["muted"], width=24, height=24,
+                                fg_color=C["surface3"], corner_radius=12)
+            icon.pack(side="left", padx=(12, 8), pady=14)
+            label = ctk.CTkLabel(cell, text=name, font=font(13), text_color=C["muted"], anchor="w")
+            label.pack(side="left")
+            self.step_widgets.append((cell, icon, label))
+        self.progress = ctk.CTkProgressBar(prog, height=6, corner_radius=3, fg_color=C["surface2"], progress_color=C["accent_text"])
+        self.progress.set(0)
+        self.progress.pack(fill="x", padx=24, pady=(6, 10))
+        self.create_msg = ctk.CTkLabel(prog, text="Tarda unos 15–20 minutos. Puedes usar las otras secciones mientras tanto.",
+                                       font=font(13), text_color=C["muted"], anchor="w", justify="left", wraplength=820)
+        self.create_msg.pack(fill="x", padx=24)
+        self.log_toggle = button(prog, "Ver registro técnico", self._toggle_log, "ghost", height=32)
+        self.log_toggle.pack(anchor="w", padx=16, pady=(8, 4))
+        self.log = ctk.CTkTextbox(prog, font=("Consolas", 12), fg_color="#0E0F12", text_color="#C9CED6", corner_radius=8,
+                                  border_color=C["hairline"], border_width=1, wrap="word")
+        self.log.configure(state="disabled")
+        self._log_visible = False
+        return page
+
+    def _toggle_log(self):
+        self._log_visible = not self._log_visible
+        if self._log_visible:
+            self.log.pack(fill="both", expand=True, padx=24, pady=(0, 20))
+            self.log_toggle.configure(text="Ocultar registro técnico")
+        else:
+            self.log.pack_forget()
+            self.log_toggle.configure(text="Ver registro técnico")
 
     def _set_step(self, index: int, state: str):
-        icons = {"pending": ("○", COLORS["muted"]), "running": ("●", COLORS["primary"]), "done": ("✓", COLORS["ok"]), "error": ("✗", COLORS["error"])}
-        icon, color = icons[state]
-        self.step_labels[index].configure(text=f"{icon}  {STEPS[index]}", fg=color, font=("Segoe UI", 12, "bold" if state == "running" else "normal"))
+        cell, icon, label = self.step_widgets[index]
+        if state == "done":
+            icon.configure(text=ICON["check"], font=(ICONS_FONT, 11), text_color=C["canvas"], fg_color=C["ok"])
+            label.configure(text_color=C["ink"], font=font(13))
+            cell.configure(fg_color=C["surface2"])
+        elif state == "running":
+            icon.configure(text=str(index + 1), font=font(12, True), text_color="#FFFFFF", fg_color=C["accent"])
+            label.configure(text_color=C["ink"], font=font(13, True))
+            cell.configure(fg_color=C["accent_bg"])
+        elif state == "error":
+            icon.configure(text=ICON["close"], font=(ICONS_FONT, 10), text_color=C["canvas"], fg_color=C["error"])
+            label.configure(text_color=C["error"], font=font(13, True))
+            cell.configure(fg_color=C["error_bg"])
+        else:
+            icon.configure(text=str(index + 1), font=font(12, True), text_color=C["muted"], fg_color=C["surface3"])
+            label.configure(text_color=C["muted"], font=font(13))
+            cell.configure(fg_color=C["surface2"])
 
     def _log(self, text: str):
         self.log.configure(state="normal")
@@ -295,142 +479,145 @@ class App(tk.Tk):
         self.log.configure(state="disabled")
 
     def start_create(self):
-        topic = self.topic_var.get().strip()
+        topic = self.topic_entry.get().strip()
         if not topic:
-            messagebox.showwarning("Falta el tema", "Escribe el tema del video antes de crearlo.")
+            self.create_msg.configure(text="Escribe el tema del video antes de crearlo.", text_color=C["warn"])
+            self.topic_entry.focus_set()
             return
         if self.runner.busy:
             messagebox.showinfo("Espera un momento", "Ya hay una tarea en curso. Espera a que termine o cancélala.")
             return
-        if free_disk_gb() < LOW_DISK_GB:
-            if not messagebox.askyesno("Poco espacio en disco", f"Quedan {free_disk_gb():.1f} GB libres. Un video necesita unos 2 GB temporales. ¿Continuar igualmente?"):
-                return
-        try:
-            duration = float(self.duration_var.get().replace(",", "."))
-        except ValueError:
-            duration = 2.5
+        if free_disk_gb() < LOW_DISK_GB and not messagebox.askyesno(
+                "Poco espacio en disco", f"Quedan {free_disk_gb():.1f} GB libres y un video necesita unos 2 GB temporales. ¿Continuar?"):
+            return
         for i in range(len(STEPS)):
             self._set_step(i, "pending")
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
-        self._begin_task("create", ["--topic", topic, "--aspect-ratio", "9:16", "--duration-minutes", str(duration), "--no-social-pack"])
-        self.create_msg.configure(text=f"Creando: {topic}")
+        self.progress.set(0)
+        self._begin_task("create", ["--topic", topic, "--aspect-ratio", "9:16", "--duration-minutes",
+                                    DURATIONS[self.duration_seg.get()], "--no-social-pack"])
+        self.create_status.configure(text=f"Creando: {topic}", text_color=C["accent_text"])
+        self.create_msg.configure(text="Tarda unos 15–20 minutos. Puedes usar las otras secciones mientras tanto.", text_color=C["muted"])
 
-    # ---------------- Pestaña 2: Revisar y publicar ----------------
-    def _build_review_tab(self):
-        tab = ttk.Frame(self.tabs)
-        self.tabs.add(tab, text="2. Revisar y publicar")
-        card = self._card(tab)
-        ttk.Label(card, text="Videos listos para revisar", style="Title.TLabel").pack(anchor="w")
-        body = ttk.Frame(card, style="Card.TFrame")
-        body.pack(fill="both", expand=True, pady=(8, 0))
-
-        left = ttk.Frame(body, style="Card.TFrame")
-        left.pack(side="left", fill="y")
-        self.review_list = ttk.Treeview(left, columns=("title", "control"), show="headings", height=14, selectmode="browse")
-        self.review_list.heading("title", text="Video")
-        self.review_list.heading("control", text="Control de calidad")
-        self.review_list.column("title", width=300)
-        self.review_list.column("control", width=170)
-        self.review_list.pack(fill="y", expand=True)
-        self.review_list.bind("<<TreeviewSelect>>", lambda e: self._show_review())
-
-        right = ttk.Frame(body, style="Card.TFrame", padding=(16, 0, 0, 0))
-        right.pack(side="left", fill="both", expand=True)
-        self.review_title = ttk.Label(right, text="Selecciona un video de la lista", style="Title.TLabel", wraplength=560)
-        self.review_title.pack(anchor="w")
-        self.review_status = tk.Label(right, text="", font=("Segoe UI", 12, "bold"), bg=COLORS["card"], anchor="w", justify="left", wraplength=560)
-        self.review_status.pack(anchor="w", pady=(4, 4), fill="x")
-        self.review_detail = ttk.Label(right, text="", style="Muted.TLabel", wraplength=560, justify="left")
-        self.review_detail.pack(anchor="w")
-        # Pregunta final para fijar a mano en TikTok y YouTube (Instagram la recibe como primer comentario)
-        self.comment_frame = tk.Frame(right, bg="#EEF3FB", padx=10, pady=6)
-        self.comment_label = tk.Label(self.comment_frame, text="", font=("Segoe UI", 11), bg="#EEF3FB", fg=COLORS["text"],
-                                      anchor="w", justify="left", wraplength=430)
-        self.comment_label.pack(side="left", fill="x", expand=True)
-        ttk.Button(self.comment_frame, text="Copiar", command=self._copy_comment).pack(side="right")
-        self.sheet_label = tk.Label(right, bg=COLORS["card"])
-        self.sheet_label.pack(anchor="w", pady=8)
-        ttk.Label(right, text="Verde = imagen aprobada · Naranja = se une con la escena anterior · Rojo = problema", style="Muted.TLabel").pack(anchor="w")
-        buttons = ttk.Frame(right, style="Card.TFrame")
-        buttons.pack(anchor="w", pady=10)
-        ttk.Button(buttons, text="▶  Ver video", command=self._play_selected).pack(side="left")
-        self.publish_btn = ttk.Button(buttons, text="Publicar en YouTube, Instagram y TikTok", style="Primary.TButton", command=self._publish_selected)
-        self.publish_btn.pack(side="left", padx=8)
-        ttk.Button(buttons, text="Descartar", command=self._discard_selected).pack(side="left")
-        self.publish_msg = ttk.Label(right, text="", style="Muted.TLabel", wraplength=560)
-        self.publish_msg.pack(anchor="w")
-        self.review_jobs: dict[str, dict] = {}
+    # ---------------- Revisar y publicar ----------------
+    def _build_review_page(self):
+        page, body = self._page("Revisar y publicar", "Mira el resultado antes de publicarlo en YouTube, Instagram y TikTok.")
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+        self.review_list = ctk.CTkScrollableFrame(body, width=330, fg_color=C["surface"], corner_radius=12, border_width=1,
+                                                  border_color=C["hairline"], scrollbar_button_color=C["surface3"],
+                                                  scrollbar_button_hover_color=C["hairline2"])
+        self.review_list.grid(row=0, column=0, sticky="nsw")
+        self.review_detail = card(body)
+        self.review_detail.grid(row=0, column=1, sticky="nsew", padx=(16, 0))
+        return page
 
     def _refresh_review(self):
-        selected = self.review_list.selection()
-        self.review_list.delete(*self.review_list.get_children())
-        self.review_jobs = {}
-        for job in load_jobs():
-            if job["status"] not in ("passed", "needs_review", "publish_failed"):
-                continue
-            key = str(job["dir"])
-            self.review_jobs[key] = job
-            control = "✓ Superado" if _gate_passed(job["report"]) else "⚠ No superado"
-            self.review_list.insert("", "end", iid=key, values=(job["title"], control))
-        if selected and selected[0] in self.review_jobs:
-            self.review_list.selection_set(selected[0])
-        elif self.review_jobs:
-            self.review_list.selection_set(next(iter(self.review_jobs)))
-        else:
-            self.review_title.configure(text="No hay videos pendientes de revisión")
-            self.review_status.configure(text="")
-            self.review_detail.configure(text="Crea uno en la pestaña «1. Crear video».")
-            self.sheet_label.configure(image="")
-        self._show_review()
+        for child in self.review_list.winfo_children():
+            child.destroy()
+        self.review_jobs = {str(j["dir"]): j for j in load_jobs() if j["status"] in ("passed", "needs_review")}
+        if self.selected_review not in self.review_jobs:
+            self.selected_review = next(iter(self.review_jobs), None)
+        ctk.CTkLabel(self.review_list, text=f"Pendientes · {len(self.review_jobs)}", font=font(12, True),
+                     text_color=C["muted"], anchor="w").pack(fill="x", padx=12, pady=(10, 6))
+        for key, job in self.review_jobs.items():
+            selected = key == self.selected_review
+            item = ctk.CTkFrame(self.review_list, fg_color=C["surface2"] if selected else "transparent", corner_radius=10,
+                                border_width=1, border_color=C["accent"] if selected else C["surface"])
+            item.pack(fill="x", padx=6, pady=3)
+            title = ctk.CTkLabel(item, text=job["title"], font=font(13, True), text_color=C["ink"], anchor="w",
+                                 justify="left", wraplength=270)
+            title.pack(fill="x", padx=14, pady=(12, 6))
+            meta = ctk.CTkFrame(item, fg_color="transparent")
+            meta.pack(fill="x", padx=14, pady=(0, 12))
+            pill(meta, job["status"]).pack(side="left")
+            ctk.CTkLabel(meta, text=job["created"].replace("T", "  ")[:17], font=font(12), text_color=C["muted"]).pack(side="right")
+            for w in (item, title, meta, *meta.winfo_children()):
+                w.bind("<Button-1>", lambda e, k=key: self._select_review(k))
+                w.configure(cursor="hand2")
+        self._render_review_detail()
 
-    def _selected_job(self):
-        sel = self.review_list.selection()
-        return self.review_jobs.get(sel[0]) if sel else None
+    def _select_review(self, key: str):
+        self.selected_review = key
+        self._refresh_review()
 
-    def _show_review(self):
-        job = self._selected_job()
+    def _render_review_detail(self):
+        for child in self.review_detail.winfo_children():
+            child.destroy()
+        job = self.review_jobs.get(self.selected_review) if self.selected_review else None
         if not job:
+            empty = ctk.CTkFrame(self.review_detail, fg_color="transparent")
+            empty.place(relx=0.5, rely=0.45, anchor="center")
+            ctk.CTkLabel(empty, text=ICON["check"], font=(ICONS_FONT, 30), text_color=C["ok"], fg_color=C["ok_bg"],
+                         width=64, height=64, corner_radius=32).pack()
+            ctk.CTkLabel(empty, text="Todo al día", font=font(18, True), text_color=C["ink"]).pack(pady=(14, 4))
+            ctk.CTkLabel(empty, text="No hay videos esperando revisión.", font=font(13), text_color=C["muted"]).pack()
+            button(empty, "Crear un video", lambda: self.show_page("create"), "primary", ICON["create"]).pack(pady=(16, 0))
             return
         report = job["report"]
-        self.review_title.configure(text=job["title"])
+        pad = dict(padx=24)
+        ctk.CTkLabel(self.review_detail, text=job["title"], font=font(18, True), text_color=C["ink"], anchor="w",
+                     justify="left", wraplength=640).pack(fill="x", pady=(22, 10), **pad)
+        status_row = ctk.CTkFrame(self.review_detail, fg_color="transparent")
+        status_row.pack(fill="x", **pad)
         if _gate_passed(report):
+            pill(status_row, "passed").pack(side="left")
             merged = report.get("merged_scenes") or {}
-            text = "✓ Superó el control de calidad"
             detail = f"Escenas unidas con la anterior: {', '.join(merged)}" if merged else "Todas las escenas tienen imagen aprobada."
-            color = COLORS["ok"]
         else:
-            text = "⚠ No superó el control de calidad. Revísalo con cuidado antes de publicar."
-            detail = "\n".join(f"• {r}" for r in report.get("reasons", []))
-            color = COLORS["warn"]
-        if job["status"] == "publish_failed":
-            text, color = "✗ El último intento de publicación falló. Puedes intentarlo de nuevo.", COLORS["error"]
-        self.review_status.configure(text=text, fg=color)
-        self.review_detail.configure(text=detail)
+            pill(status_row, "needs_review").pack(side="left")
+            detail = "Revísalo con cuidado antes de publicar. " + " ".join(report.get("reasons", []))
+        ctk.CTkLabel(status_row, text=detail, font=font(13), text_color=C["muted"], anchor="w", justify="left",
+                     wraplength=520).pack(side="left", padx=12)
+
         question = (report.get("closing_question") or "").strip()
         if question:
-            self.comment_label.configure(text=f"Comentario para fijar en TikTok y YouTube:\n«{question}»")
-            self.comment_frame.pack(anchor="w", fill="x", pady=(6, 0), before=self.sheet_label)
-        else:
-            self.comment_frame.pack_forget()
+            box = ctk.CTkFrame(self.review_detail, fg_color=C["accent_bg"], corner_radius=10)
+            box.pack(fill="x", pady=(16, 0), **pad)
+            text = ctk.CTkFrame(box, fg_color="transparent")
+            text.pack(side="left", fill="x", expand=True, padx=16, pady=12)
+            ctk.CTkLabel(text, text="Comentario para fijar en TikTok y YouTube", font=font(12, True),
+                         text_color=C["accent_text"], anchor="w").pack(anchor="w")
+            ctk.CTkLabel(text, text=question, font=font(14), text_color=C["ink"], anchor="w", justify="left",
+                         wraplength=480).pack(anchor="w", pady=(2, 0))
+            button(box, "Copiar", lambda q=question: self._copy_comment(q), "secondary", ICON["copy"], width=110).pack(side="right", padx=14)
+
         sheet = Path(report.get("contact_sheet", ""))
         if sheet.exists():
             with Image.open(sheet) as im:
                 im = im.convert("RGB")
-                im.thumbnail((620, 340))
-                self._photo = ImageTk.PhotoImage(im)
-            self.sheet_label.configure(image=self._photo)
-        else:
-            self.sheet_label.configure(image="")
+            self.update_idletasks()
+            window = self.winfo_width() if self.winfo_width() > 600 else 1280
+            available = window - 244 - 36 * 2 - 346 - 16 - 56  # ventana - menú - márgenes - lista - separación - relleno
+            width = max(420, min(720, available))
+            height = int(im.height * width / im.width)
+            self._sheet_image = ctk.CTkImage(light_image=im, dark_image=im, size=(width, height))
+            ctk.CTkLabel(self.review_detail, image=self._sheet_image, text="").pack(anchor="w", pady=(16, 6), **pad)
+            ctk.CTkLabel(self.review_detail, text="Verde: imagen aprobada · Naranja: se une con la escena anterior · Rojo: problema",
+                         font=font(12), text_color=C["muted"], anchor="w").pack(anchor="w", **pad)
 
-    def _copy_comment(self):
-        job = self._selected_job()
-        question = (job["report"].get("closing_question") or "").strip() if job else ""
-        if question:
-            self.clipboard_clear()
-            self.clipboard_append(question)
-            self.publish_msg.configure(text="✓ Pregunta copiada. Pégala como comentario y fíjala en TikTok y YouTube.", foreground=COLORS["ok"])
+        actions = ctk.CTkFrame(self.review_detail, fg_color="transparent")
+        actions.pack(fill="x", pady=(18, 6), **pad)
+        self.publish_btn = button(actions, "Publicar en YouTube, Instagram y TikTok", self._publish_selected, "primary",
+                                  ICON["send"], height=42)
+        self.publish_btn.pack(side="left")
+        button(actions, "Ver video", self._play_selected, "secondary", ICON["play"], height=42).pack(side="left", padx=8)
+        button(actions, "Descartar", self._discard_selected, "danger", height=42).pack(side="left")
+        if self.runner.busy:
+            self.publish_btn.configure(state="disabled")
+        self.review_msg = ctk.CTkLabel(self.review_detail, text="", font=font(13), text_color=C["muted"], anchor="w",
+                                       justify="left", wraplength=640)
+        self.review_msg.pack(fill="x", pady=(4, 18), **pad)
+
+    def _selected_job(self):
+        return self.review_jobs.get(self.selected_review) if self.selected_review else None
+
+    def _copy_comment(self, question: str):
+        self.clipboard_clear()
+        self.clipboard_append(question)
+        self.review_msg.configure(text="Pregunta copiada. Pégala como comentario y fíjala en TikTok y YouTube.", text_color=C["ok"])
 
     def _play_selected(self):
         job = self._selected_job()
@@ -438,7 +625,7 @@ class App(tk.Tk):
         if video and video.exists():
             os.startfile(video)
         else:
-            messagebox.showwarning("Video no encontrado", "No se encontró el archivo de video de este trabajo.")
+            self.review_msg.configure(text="No se encontró el archivo de video de este trabajo.", text_color=C["error"])
 
     def _publish_selected(self):
         job = self._selected_job()
@@ -447,17 +634,14 @@ class App(tk.Tk):
         if self.runner.busy:
             messagebox.showinfo("Espera un momento", "Ya hay una tarea en curso. Espera a que termine.")
             return
-        warning = ""
-        if not _gate_passed(job["report"]):
-            warning = "\n\n⚠ ATENCIÓN: este video NO superó el control de calidad."
-        if not messagebox.askyesno(
-            "Confirmar publicación",
-            f"Se publicará AHORA y de forma pública en YouTube, Instagram y TikTok:\n\n«{job['title']}»{warning}\n\n¿Publicar?",
-            icon="warning",
-        ):
+        warning = "" if _gate_passed(job["report"]) else "\n\nATENCIÓN: este video NO superó el control de calidad."
+        if not messagebox.askyesno("Confirmar publicación",
+                                   f"Se publicará AHORA y de forma pública en YouTube, Instagram y TikTok:\n\n«{job['title']}»{warning}\n\n¿Publicar?",
+                                   icon="warning"):
             return
-        self.publish_msg.configure(text="Publicando… puede tardar unos minutos (se sube el video y se redactan los textos).", foreground=COLORS["primary"])
         self._begin_task("publish", ["--publish-job", str(job["dir"])])
+        self.review_msg.configure(text="Publicando… puede tardar unos minutos (se sube el video y se redactan los textos).",
+                                  text_color=C["accent_text"])
 
     def _discard_selected(self):
         job = self._selected_job()
@@ -466,144 +650,232 @@ class App(tk.Tk):
         report = job["report"]
         report["status"] = "discarded"
         (job["dir"] / "quality_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.selected_review = None
         self._refresh_review()
+        self._refresh_badges()
 
-    # ---------------- Pestaña 3: Historial ----------------
-    def _build_history_tab(self):
-        tab = ttk.Frame(self.tabs)
-        self.tabs.add(tab, text="3. Historial")
-        card = self._card(tab)
-        top = ttk.Frame(card, style="Card.TFrame")
-        top.pack(fill="x")
-        ttk.Label(top, text="Videos producidos y publicados", style="Title.TLabel").pack(side="left")
-        ttk.Button(top, text="Abrir carpeta del video", command=self._open_history_folder).pack(side="right")
-        ttk.Button(top, text="Actualizar enlaces", command=self._refresh_links).pack(side="right", padx=8)
-        ttk.Label(card, text="Doble clic en YouTube, Instagram o TikTok para abrir la publicación.", style="Muted.TLabel").pack(anchor="w", pady=(2, 8))
-        cols = ("date", "title", "status", *PLATFORMS)
-        self.history = ttk.Treeview(card, columns=cols, show="headings", selectmode="browse")
-        for col, text, width in (("date", "Fecha", 140), ("title", "Video", 380), ("status", "Estado", 170),
-                                 ("youtube", "YouTube", 120), ("instagram", "Instagram", 120), ("tiktok", "TikTok", 120)):
-            self.history.heading(col, text=text)
-            self.history.column(col, width=width, anchor="w" if col in ("title", "status") else "center")
-        self.history.pack(fill="both", expand=True)
-        self.history.bind("<Double-1>", self._open_history_link)
-        self.history_msg = ttk.Label(card, text="", style="Muted.TLabel")
-        self.history_msg.pack(anchor="w", pady=(6, 0))
-        self.history_jobs: dict[str, dict] = {}
+    # ---------------- Historial ----------------
+    def _build_history_page(self):
+        page, body = self._page("Historial", "Videos producidos y publicados. Pulsa una plataforma para abrir la publicación.")
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(2, weight=1)
+        bar = ctk.CTkFrame(body, fg_color="transparent")
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        button(bar, "Actualizar enlaces", self._refresh_links, "secondary", ICON["refresh"]).pack(side="left")
+        self.history_msg = ctk.CTkLabel(bar, text="", font=font(13), text_color=C["muted"])
+        self.history_msg.pack(side="left", padx=14)
+        self.history_alert = ctk.CTkFrame(body, fg_color=C["error_bg"], corner_radius=10)
+        self.history_list = ctk.CTkScrollableFrame(body, fg_color=C["surface"], corner_radius=12, border_width=1,
+                                                   border_color=C["hairline"], scrollbar_button_color=C["surface3"],
+                                                   scrollbar_button_hover_color=C["hairline2"])
+        self.history_list.grid(row=2, column=0, sticky="nsew")
+        return page
 
     def _refresh_history(self):
-        self.history.delete(*self.history.get_children())
-        self.history_jobs = {}
-        for job in load_jobs():
-            key = str(job["dir"])
-            self.history_jobs[key] = job
-            links = []
+        for child in self.history_list.winfo_children():
+            child.destroy()
+        jobs = load_jobs()
+        if not jobs:
+            ctk.CTkLabel(self.history_list, text="Todavía no hay videos. Crea el primero en «Crear video».",
+                         font=font(14), text_color=C["muted"]).pack(pady=40)
+            return
+        # Columnas fijas para que fecha, estado y publicaciones queden alineadas en todas las filas
+        cols = ((0, 124, 0), (1, 220, 1), (2, 176, 0), (3, 312, 0), (4, 44, 0))
+
+        def grid_cols(frame):
+            for col, minsize, weight in cols:
+                frame.grid_columnconfigure(col, minsize=minsize, weight=weight)
+
+        head = ctk.CTkFrame(self.history_list, fg_color="transparent")
+        head.pack(fill="x", padx=6, pady=(10, 4))
+        grid_cols(head)
+        for col, text in ((0, "Fecha"), (1, "Video"), (2, "Estado"), (3, "Publicaciones")):
+            ctk.CTkLabel(head, text=text, font=font(12, True), text_color=C["muted"], anchor="w").grid(
+                row=0, column=col, sticky="w", padx=(12 if col == 0 else 6, 6))
+        for job in jobs:
+            row = ctk.CTkFrame(self.history_list, fg_color=C["surface2"], corner_radius=10)
+            row.pack(fill="x", padx=6, pady=3)
+            grid_cols(row)
+            ctk.CTkLabel(row, text=job["created"].replace("T", " ")[:16], font=("Consolas", 12), text_color=C["muted"],
+                         anchor="w").grid(row=0, column=0, sticky="w", padx=(12, 6), pady=12)
+            ctk.CTkLabel(row, text=job["title"], font=font(13, True), text_color=C["ink"], anchor="w", justify="left",
+                         wraplength=232).grid(row=0, column=1, sticky="w", padx=6, pady=8)
+            pill(row, job["status"]).grid(row=0, column=2, sticky="w", padx=6)
+            chips = ctk.CTkFrame(row, fg_color="transparent")
+            chips.grid(row=0, column=3, sticky="w", padx=6)
             for p in PLATFORMS:
                 info = job["publication"].get("platforms", {}).get(p, {})
-                if info.get("link"):
-                    links.append("Abrir ↗")
-                elif info.get("status") == "success":
-                    links.append("Enviado")
-                elif info.get("status"):
-                    links.append("Error")
-                else:
-                    links.append("—")
-            date = job["created"].replace("T", " ")[:16]
-            self.history.insert("", "end", iid=key, values=(date, job["title"], STATUS_LABELS.get(job["status"], "Sin revisar"), *links))
+                self._platform_chip(chips, job, p, info).pack(side="left", padx=3)
+            button(row, "", lambda j=job: self._open_folder(j), "ghost", ICON["folder"], width=36,
+                   height=32, font=(ICONS_FONT, 13)).grid(row=0, column=4, padx=(0, 6))
 
-    def _open_history_link(self, event):
-        row, col = self.history.identify_row(event.y), self.history.identify_column(event.x)
-        if not row:
+    def _platform_chip(self, parent, job: dict, platform: str, info: dict) -> ctk.CTkButton:
+        name = PLATFORM_NAMES[platform]
+        status = info.get("status")
+        if status == "success":
+            text, color, bg = icon_text(ICON["link"] if info.get("link") else ICON["check"], name), C["ok"], C["ok_bg"]
+        elif status:
+            text, color, bg = icon_text(ICON["warn"], name), C["error"], C["error_bg"]
+        else:
+            text, color, bg = name, C["muted"], C["surface3"]
+        return ctk.CTkButton(parent, text=text, width=96, height=30, corner_radius=6, font=font(12, True),
+                             fg_color=bg, hover_color=C["surface3"], text_color=color,
+                             command=lambda: self._chip_clicked(job, platform, info))
+
+    def _chip_clicked(self, job: dict, platform: str, info: dict):
+        if info.get("link"):
+            webbrowser.open(info["link"])
+        elif info.get("status") == "success":
+            self.history_msg.configure(text="Publicado; el enlace aparece al pulsar «Actualizar enlaces» en unos minutos.", text_color=C["muted"])
+        elif info.get("status"):
+            self._show_history_alert(job, platform, info)
+        else:
+            self.history_msg.configure(text=f"Este video no se envió a {PLATFORM_NAMES[platform]}.", text_color=C["muted"])
+
+    def _show_history_alert(self, job: dict, platform: str, info: dict):
+        for child in self.history_alert.winfo_children():
+            child.destroy()
+        self.history_alert.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        text = ctk.CTkFrame(self.history_alert, fg_color="transparent")
+        text.pack(side="left", fill="x", expand=True, padx=16, pady=12)
+        ctk.CTkLabel(text, text=icon_text(ICON["warn"], f"No se publicó en {PLATFORM_NAMES[platform]}: {job['title']}"),
+                     font=font(13, True), text_color=C["error"], anchor="w", justify="left", wraplength=700).pack(anchor="w")
+        ctk.CTkLabel(text, text=friendly_error(info.get("message", "")), font=font(13), text_color=C["ink"], anchor="w",
+                     justify="left", wraplength=700).pack(anchor="w", pady=(2, 0))
+        button(self.history_alert, "", self.history_alert.grid_forget, "ghost", ICON["close"], width=36,
+               font=(ICONS_FONT, 12)).pack(side="right", padx=(0, 8))
+        button(self.history_alert, f"Reintentar en {PLATFORM_NAMES[platform]}",
+               lambda: self._retry_platform(job, platform), "primary", ICON["refresh"]).pack(side="right", padx=8)
+
+    def _retry_platform(self, job: dict, platform: str):
+        if self.runner.busy:
+            messagebox.showinfo("Espera un momento", "Ya hay una tarea en curso.")
             return
-        index = int(col.replace("#", "")) - 1
-        cols = ("date", "title", "status", *PLATFORMS)
-        if index < len(cols) and cols[index] in PLATFORMS:
-            link = self.history_jobs[row]["publication"].get("platforms", {}).get(cols[index], {}).get("link")
-            if link:
-                webbrowser.open(link)
-            else:
-                messagebox.showinfo("Sin enlace", "Todavía no hay enlace. Pulsa «Actualizar enlaces» en unos minutos.")
+        if not messagebox.askyesno("Reintentar publicación",
+                                   f"Se publicará AHORA en {PLATFORM_NAMES[platform]}:\n\n«{job['title']}»\n\n¿Continuar?", icon="warning"):
+            return
+        self.history_alert.grid_forget()
+        self.history_msg.configure(text=f"Publicando en {PLATFORM_NAMES[platform]}…", text_color=C["accent_text"])
+        self._begin_task("publish", ["--publish-job", str(job["dir"]), "--publish-platforms", platform])
 
-    def _open_history_folder(self):
-        sel = self.history.selection()
-        if sel:
-            video = Path(self.history_jobs[sel[0]]["report"].get("video_path", ""))
-            os.startfile(video.parent if video.exists() else self.history_jobs[sel[0]]["dir"])
+    def _open_folder(self, job: dict):
+        video = Path(job["report"].get("video_path", ""))
+        os.startfile(video.parent if video.exists() else job["dir"])
 
     def _refresh_links(self):
-        self.history_msg.configure(text="Consultando enlaces en Buffer…")
+        self.history_msg.configure(text="Consultando enlaces en Buffer…", text_color=C["accent_text"])
 
         def work():
             try:
                 found = refresh_links(load_jobs())
-                msg = f"Enlaces actualizados ({found} nuevos)."
+                msg, color = f"Enlaces actualizados ({found} nuevos).", C["ok"]
             except Exception as e:
-                msg = f"No se pudieron consultar los enlaces: {e}"
-            self.after(0, lambda: (self.history_msg.configure(text=msg), self._refresh_history()))
+                msg, color = f"No se pudieron consultar los enlaces: {e}", C["error"]
+            self.after(0, lambda: (self.history_msg.configure(text=msg, text_color=color), self._refresh_history()))
 
         threading.Thread(target=work, daemon=True).start()
 
-    # ---------------- Pestaña 4: Cola y estado ----------------
-    def _build_status_tab(self):
-        tab = ttk.Frame(self.tabs)
-        self.tabs.add(tab, text="4. Cola y estado")
-        card = self._card(tab)
-        ttk.Label(card, text="Estado del sistema", style="Title.TLabel").pack(anchor="w")
-        self.disk_label = tk.Label(card, text="", font=("Segoe UI", 12), bg=COLORS["card"], anchor="w")
-        self.disk_label.pack(anchor="w", pady=(8, 2))
-        row = ttk.Frame(card, style="Card.TFrame")
-        row.pack(anchor="w", fill="x")
-        self.pollen_label = tk.Label(row, text="Saldo de imágenes IA (Pollinations): —", font=("Segoe UI", 12), bg=COLORS["card"], fg=COLORS["text"])
-        self.pollen_label.pack(side="left")
-        ttk.Button(row, text="Consultar saldo", command=self._refresh_pollen).pack(side="left", padx=12)
-        self.diag_frame = ttk.Frame(card, style="Card.TFrame")
-        self.diag_frame.pack(anchor="w", fill="x", pady=(10, 0))
+    # ---------------- Estado ----------------
+    def _build_status_page(self):
+        page, body = self._page("Estado", "Espacio, saldo de imágenes, claves y cola de publicación.")
+        body.grid_columnconfigure((0, 1), weight=1, uniform="cols")
+        body.grid_rowconfigure(2, weight=1)
 
-        ttk.Separator(card).pack(fill="x", pady=16)
-        top = ttk.Frame(card, style="Card.TFrame")
-        top.pack(fill="x")
-        ttk.Label(top, text="Cola de publicación", style="Title.TLabel").pack(side="left")
-        self.queue_btn = ttk.Button(top, text="Procesar cola ahora", style="Primary.TButton", command=self._process_queue)
+        disk = card(body)
+        disk.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        ctk.CTkLabel(disk, text="Espacio libre en disco", font=font(13), text_color=C["muted"], anchor="w").pack(anchor="w", padx=22, pady=(18, 0))
+        self.disk_value = ctk.CTkLabel(disk, text="—", font=font(28, True), text_color=C["ink"], anchor="w")
+        self.disk_value.pack(anchor="w", padx=22)
+        self.disk_bar = ctk.CTkProgressBar(disk, height=6, corner_radius=3, fg_color=C["surface2"])
+        self.disk_bar.pack(fill="x", padx=22, pady=(8, 6))
+        self.disk_note = ctk.CTkLabel(disk, text="", font=font(12), text_color=C["muted"], anchor="w")
+        self.disk_note.pack(anchor="w", padx=22, pady=(0, 18))
+
+        pollen = card(body)
+        pollen.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        top = ctk.CTkFrame(pollen, fg_color="transparent")
+        top.pack(fill="x", padx=22, pady=(18, 0))
+        ctk.CTkLabel(top, text="Saldo de imágenes con IA (Pollinations)", font=font(13), text_color=C["muted"]).pack(side="left")
+        button(top, "Consultar", self._refresh_pollen, "secondary", ICON["refresh"], height=30, width=110).pack(side="right")
+        self.pollen_value = ctk.CTkLabel(pollen, text="—", font=font(28, True), text_color=C["ink"], anchor="w")
+        self.pollen_value.pack(anchor="w", padx=22)
+        self.pollen_note = ctk.CTkLabel(pollen, text="Pulsa «Consultar» para ver el saldo.", font=font(12), text_color=C["muted"], anchor="w")
+        self.pollen_note.pack(anchor="w", padx=22, pady=(4, 18))
+
+        self.diag_card = card(body)
+        self.diag_card.grid(row=1, column=0, columnspan=2, sticky="ew", pady=16)
+
+        queue_card = card(body)
+        queue_card.grid(row=2, column=0, columnspan=2, sticky="nsew")
+        qtop = ctk.CTkFrame(queue_card, fg_color="transparent")
+        qtop.pack(fill="x", padx=22, pady=(18, 4))
+        ctk.CTkLabel(qtop, text="Cola de publicación", font=font(14, True), text_color=C["ink"]).pack(side="left")
+        self.queue_btn = button(qtop, "Procesar cola ahora", self._process_queue, "primary", ICON["send"])
         self.queue_btn.pack(side="right")
-        ttk.Label(card, text="Videos que esperan a que haya cuota de revisión visual. Al procesar la cola se revisan y se publican los que pasen el control.",
-                  style="Muted.TLabel", wraplength=1000).pack(anchor="w", pady=(2, 8))
-        self.queue_list = ttk.Treeview(card, columns=("topic", "queued", "attempts"), show="headings", height=8)
-        for col, text, width in (("topic", "Video", 600), ("queued", "En cola desde", 200), ("attempts", "Intentos", 100)):
-            self.queue_list.heading(col, text=text)
-            self.queue_list.column(col, width=width, anchor="w" if col == "topic" else "center")
-        self.queue_list.pack(fill="both", expand=True)
-        self.queue_msg = ttk.Label(card, text="", style="Muted.TLabel")
-        self.queue_msg.pack(anchor="w", pady=(6, 0))
+        ctk.CTkLabel(queue_card, text="Videos que esperan cuota de revisión visual. Al procesar la cola se revisan y se publican los que pasan el control.",
+                     font=font(12), text_color=C["muted"], anchor="w", justify="left", wraplength=900).pack(anchor="w", padx=22)
+        self.queue_rows = ctk.CTkFrame(queue_card, fg_color="transparent")
+        self.queue_rows.pack(fill="both", expand=True, padx=16, pady=(8, 16))
+        return page
 
     def _refresh_status(self):
         free = free_disk_gb()
         low = free < LOW_DISK_GB
-        self.disk_label.configure(
-            text=f"Espacio libre en disco: {free:.1f} GB" + ("  ⚠ Poco espacio: libera disco antes de crear más videos." if low else "  ✓ Suficiente"),
-            fg=COLORS["error"] if low else COLORS["ok"],
-        )
-        for child in self.diag_frame.winfo_children():
+        self.disk_value.configure(text=f"{free:.1f} GB".replace(".", ","), text_color=C["error"] if low else C["ink"])
+        used = disk_usage_ratio()
+        self.disk_bar.configure(progress_color=C["error"] if low else (C["warn"] if used > 0.9 else C["accent_text"]))
+        self.disk_bar.set(min(1.0, used))
+        note = "Poco espacio: libera disco antes de crear más videos." if low else "Suficiente para crear videos."
+        self.disk_note.configure(text=f"Disco usado al {used:.0%}".replace("%", " %") + f" · {note}",
+                                 text_color=C["error"] if low else C["muted"])
+
+        for child in self.diag_card.winfo_children():
             child.destroy()
-        for name, ok, required, hint in run_diagnostics():
-            icon, color = ("✓", COLORS["ok"]) if ok else (("✗", COLORS["error"]) if required else ("!", COLORS["warn"]))
-            text = f"{icon}  {name}" + ("" if ok else f" — {hint}")
-            tk.Label(self.diag_frame, text=text, font=("Segoe UI", 11), bg=COLORS["card"], fg=color, anchor="w").pack(anchor="w")
-        self.queue_list.delete(*self.queue_list.get_children())
+        ctk.CTkLabel(self.diag_card, text="Comprobaciones", font=font(14, True), text_color=C["ink"], anchor="w").pack(anchor="w", padx=22, pady=(18, 8))
+        grid = ctk.CTkFrame(self.diag_card, fg_color="transparent")
+        grid.pack(fill="x", padx=16, pady=(0, 16))
+        grid.grid_columnconfigure((0, 1), weight=1, uniform="d")
+        for n, (name, ok, required, hint) in enumerate(run_diagnostics()):
+            if ok:
+                glyph, color, bg = ICON["check"], C["ok"], C["ok_bg"]
+            elif required:
+                glyph, color, bg = ICON["close"], C["error"], C["error_bg"]
+            else:
+                glyph, color, bg = ICON["warn"], C["warn"], C["warn_bg"]
+            item = ctk.CTkFrame(grid, fg_color=C["surface2"], corner_radius=8)
+            item.grid(row=n // 2, column=n % 2, sticky="ew", padx=6, pady=4)
+            ctk.CTkLabel(item, text=glyph, font=(ICONS_FONT, 11), text_color=color, fg_color=bg, width=26, height=26,
+                         corner_radius=13).pack(side="left", padx=(10, 10), pady=10)
+            texts = ctk.CTkFrame(item, fg_color="transparent")
+            texts.pack(side="left", fill="x", expand=True, pady=6)
+            ctk.CTkLabel(texts, text=name, font=font(13), text_color=C["ink"], anchor="w").pack(anchor="w")
+            if not ok:
+                ctk.CTkLabel(texts, text=hint, font=font(12), text_color=color, anchor="w", justify="left", wraplength=380).pack(anchor="w")
+
+        for child in self.queue_rows.winfo_children():
+            child.destroy()
         entries = load_queue()
+        if not entries:
+            ctk.CTkLabel(self.queue_rows, text=icon_text(ICON["check"], "La cola está vacía."), font=font(13),
+                         text_color=C["muted"], anchor="w").pack(anchor="w", padx=6, pady=6)
         for e in entries:
-            self.queue_list.insert("", "end", values=(e.get("topic", e["file"].stem), (e.get("queued_at") or "").replace("T", " ")[:16], e.get("attempts", 0)))
-        if not self.runner.busy:
-            self.queue_msg.configure(text="La cola está vacía." if not entries else f"{len(entries)} video(s) en cola.")
+            row = ctk.CTkFrame(self.queue_rows, fg_color=C["surface2"], corner_radius=8)
+            row.pack(fill="x", pady=3)
+            ctk.CTkLabel(row, text=e.get("topic", e["file"].stem), font=font(13, True), text_color=C["ink"], anchor="w").pack(side="left", padx=12, pady=10)
+            ctk.CTkLabel(row, text=f"En cola desde {(e.get('queued_at') or '').replace('T', ' ')[:16]} · intentos: {e.get('attempts', 0)}",
+                         font=font(12), text_color=C["muted"]).pack(side="right", padx=12)
 
     def _refresh_pollen(self):
-        self.pollen_label.configure(text="Saldo de imágenes IA (Pollinations): consultando…")
+        self.pollen_note.configure(text="Consultando…", text_color=C["accent_text"])
 
         def work():
             try:
-                text = fetch_pollen_balance()
+                balance, note = fetch_pollen_balance()
+                value = "—" if balance < 0 else f"{balance:.3f} Pollen".replace(".", ",")
+                color = C["muted"]
             except Exception as e:
-                text = f"no disponible ({e.__class__.__name__})"
-            self.after(0, lambda: self.pollen_label.configure(text=f"Saldo de imágenes IA (Pollinations): {text}"))
+                value, note, color = "—", f"No disponible ({e.__class__.__name__})", C["error"]
+            self.after(0, lambda: (self.pollen_value.configure(text=value), self.pollen_note.configure(text=note, text_color=color)))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -614,54 +886,57 @@ class App(tk.Tk):
         if self.runner.busy:
             messagebox.showinfo("Espera un momento", "Ya hay una tarea en curso.")
             return
-        if not messagebox.askyesno("Procesar cola", "Los videos de la cola que superen el control de calidad se publicarán AHORA en las 3 cuentas. ¿Continuar?", icon="warning"):
+        if not messagebox.askyesno("Procesar cola", "Los videos de la cola que superen el control de calidad se publicarán AHORA en las 3 cuentas. ¿Continuar?",
+                                   icon="warning"):
             return
-        self.queue_msg.configure(text="Procesando la cola…")
         self._begin_task("queue", ["--process-queue", "--no-approval"])
 
     # ---------------- Tareas en segundo plano ----------------
     def _begin_task(self, kind: str, args: list[str]):
         self.current_task = kind
         self.runner.start(args)
-        self.progress.start(12)
         self.create_btn.configure(state="disabled")
-        self.publish_btn.configure(state="disabled")
         self.queue_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         labels = {"create": "Creando video…", "publish": "Publicando…", "queue": "Procesando la cola…"}
-        self.header_status.configure(text=labels[kind])
+        self.task_label.configure(text=icon_text(ICON["dot"], labels[kind]), text_color=C["accent_text"])
+        self.task_bar.configure(mode="indeterminate")
+        self.task_bar.start()
 
     def _end_task(self, code: int):
         kind, self.current_task = self.current_task, None
-        self.progress.stop()
         self.create_btn.configure(state="normal")
-        self.publish_btn.configure(state="normal")
         self.queue_btn.configure(state="normal")
         self.cancel_btn.configure(state="disabled")
-        self.header_status.configure(text="")
+        self.task_bar.stop()
+        self.task_bar.configure(mode="determinate")
+        self.task_bar.set(0)
+        self.task_label.configure(text=icon_text(ICON["dot"], "Sin tareas en curso"), text_color=C["muted"])
         if kind == "create":
             if code == 0:
                 for i in range(len(STEPS)):
                     self._set_step(i, "done")
-                self.create_msg.configure(text="✓ Video listo. Revísalo en la pestaña «2. Revisar y publicar».")
-                self.refresh_all()
-                self.tabs.select(1)
+                self.progress.set(1)
+                self.create_status.configure(text="Video listo", text_color=C["ok"])
+                self.create_msg.configure(text="El video está listo. Revísalo en «Revisar y publicar».", text_color=C["ok"])
+                self.show_page("review")
             else:
-                running = [i for i, lbl in enumerate(self.step_labels) if lbl.cget("text").startswith("●")]
+                running = [i for i, (cell, _, _) in enumerate(self.step_widgets) if cell.cget("fg_color") == C["accent_bg"]]
                 if running:
                     self._set_step(running[0], "error")
-                self.create_msg.configure(text="✗ La creación se detuvo. Mira el registro de abajo para ver el motivo.")
+                self.create_status.configure(text="Detenido", text_color=C["error"])
+                self.create_msg.configure(text="La creación se detuvo. Abre el registro técnico para ver el motivo.", text_color=C["error"])
         elif kind == "publish":
             ok = code == 0
-            self.publish_msg.configure(
-                text="✓ Publicado en las 3 cuentas. Los enlaces aparecerán en «3. Historial» en unos minutos." if ok
-                else "✗ La publicación falló. Revisa tu conexión y vuelve a intentarlo.",
-                foreground=COLORS["ok"] if ok else COLORS["error"],
-            )
-            self.refresh_all()
+            text = ("Publicado. Los enlaces aparecen en «Historial» en unos minutos." if ok
+                    else "La publicación tuvo errores. Mira el detalle en «Historial».")
+            if self.current_page == "review" and hasattr(self, "review_msg") and self.review_msg.winfo_exists():
+                self.review_msg.configure(text=text, text_color=C["ok"] if ok else C["error"])
+            self.history_msg.configure(text=text, text_color=C["ok"] if ok else C["error"])
+            self.show_page(self.current_page)
         elif kind == "queue":
-            self.refresh_all()
-            self.queue_msg.configure(text="Cola procesada." if code == 0 else "Hubo un error al procesar la cola.")
+            self.show_page("status")
+        self._refresh_badges()
 
     def _poll_runner(self):
         try:
@@ -677,9 +952,9 @@ class App(tk.Tk):
                         for i in range(n):
                             self._set_step(i, "done")
                         self._set_step(n, "running")
+                        self.progress.set(n / len(STEPS))
+                        self.create_msg.configure(text=f"Paso {n + 1} de 6: {STEPS[n]}…", text_color=C["muted"])
                     self._log(friendly(value))
-                elif self.current_task == "publish" and "publicado exitosamente" in value.lower():
-                    self.publish_msg.configure(text=friendly(value))
         except queue.Empty:
             pass
         self.after(200, self._poll_runner)
@@ -687,11 +962,6 @@ class App(tk.Tk):
     def cancel_task(self):
         if self.runner.busy and messagebox.askyesno("Cancelar", "¿Detener la tarea en curso?"):
             self.runner.cancel()
-
-    def refresh_all(self):
-        self._refresh_review()
-        self._refresh_history()
-        self._refresh_status()
 
     def _on_close(self):
         if self.runner.busy and not messagebox.askyesno("Hay una tarea en curso", "Si cierras la ventana se detendrá la tarea en curso. ¿Cerrar igualmente?"):

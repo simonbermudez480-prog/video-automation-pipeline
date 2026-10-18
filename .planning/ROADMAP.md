@@ -157,3 +157,11 @@
     - Spike Buffer: solo Instagram acepta `firstComment` (se envía la pregunta); TikTok y YouTube no → recuadro "Comentario para fijar" con botón Copiar en la interfaz (`screenshots/fase20_interfaz_comentario.png`). Pregunta añadida a los 3 textos (verificado sin red).
     - Hallazgo: Buffer tiene `isAiGenerated` para TikTok, YouTube e Instagram; los videos con imágenes FLUX podrían requerir la etiqueta de contenido IA (decisión pendiente del usuario).
   - [ ] 20.6 Medición tras publicar 3–5 videos nuevos: comparar con la línea base de Bin Laden (FR-17.6).
+
+- [x] **Phase 21: Corrección de Instagram y rediseño de la interfaz** (Requisitos: FR-18)
+  - [x] 21.1 Instagram reintenta sin primer comentario; `publication.json` fusiona plataformas (prueba de reproducción en verde).
+  - [x] 21.2 Historial con estado parcial, motivo del error y "Reintentar en <plataforma>".
+  - [x] 21.3 Rediseño oscuro con CustomTkinter (menú lateral, tarjetas, píldoras, estados vacíos).
+  - [x] 21.4 Verificado (2026-10-18): capturas reales `screenshots/fase21_create.png`, `fase21_review.png`, `fase21_history.png` (con aviso de error y "Reintentar en Instagram") y `fase21_status.png` revisadas; contraste comprobado (texto 15,7:1, secundario 7,7:1, botón principal 7,0:1). Reintento probado sin publicar: genera `--publish-job <carpeta> --publish-platforms instagram`.
+    - Corregido en la verificación: píldora de estado cortada y títulos recortados en el historial (columnas fijas en cuadrícula), emojis de los títulos que Tk mostraba como cuadros, barra de disco que mostraba el espacio usado en azul con texto "Suficiente", hoja de contacto recortada o demasiado pequeña.
+    - Solo tema oscuro (decisión del usuario). Requiere `customtkinter` (añadido a requirements.txt; el instalador lo instala). Pendiente: volver a publicar en Instagram los 5 videos afectados, con confirmación del usuario.

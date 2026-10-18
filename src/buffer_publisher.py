@@ -423,6 +423,12 @@ class BufferPublisher:
             }
         }
         res = self._execute_create_post(variables)
+        ig_meta = variables["input"]["metadata"]["instagram"]
+        if res.get("status") != "success" and "firstComment" in ig_meta and "paid plan" in str(res.get("message", "")).lower():
+            # El plan gratuito de Buffer no admite primer comentario: sin este reintento se pierde todo el post
+            logger.warning("Buffer: el primer comentario requiere plan de pago; publicando Instagram sin él...")
+            ig_meta.pop("firstComment")
+            res = self._execute_create_post(variables)
         res["hook"] = ig.hook_line
         return res
 

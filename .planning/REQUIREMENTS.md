@@ -145,3 +145,11 @@
 - **FR-17.5 Comentario fijado:** si Buffer permite publicar un primer comentario por API para alguna plataforma, se publica la pregunta como primer comentario; si no, la interfaz muestra "Comentario para fijar" con un botón para copiarlo.
 - **FR-17.6 Medición:** se registra en `.planning` el "segundo en que se va la mayoría", el tiempo medio y el porcentaje que lo termina de los videos nuevos (TikTok Studio) para compararlos con la línea base (0:02 / 45,3 s / 19,7 %).
 - **Criterio de aceptación:** video de prueba re-montado desde un trabajo existente (sin publicar) con capturas a 0,3 s, 1 s, 2 s y en los últimos 3 s revisadas visualmente: gancho legible y con contraste, cambio de plano antes de 2 s, pregunta final visible y sin chocar con los subtítulos; audio completo.
+
+### FR-18: Corrección de Instagram y rediseño de la interfaz (Fase 21)
+**Contexto (2026-10-18):** El historial marcaba "Error" en Instagram aunque YouTube y TikTok se publicaban. Causa raíz: desde la Fase 20 se enviaba `firstComment` a Instagram y el plan gratuito de Buffer rechaza el post completo ("First comment requires a paid plan"): 5 videos no llegaron a Instagram (Oreja de Jenkins, Karánsebes, Tres Reyes, Guam, Sargento Reckless). Además, re-publicar en una plataforma sobrescribía el registro de las demás.
+
+- **FR-18.1** Instagram reintenta sin primer comentario cuando Buffer exige plan de pago. `publication.json` solo reemplaza las plataformas publicadas en cada intento.
+- **FR-18.2** El historial distingue "Publicado", "Publicado con errores" y "Error al publicar", muestra el motivo de cada error y permite reintentar solo la plataforma que falló.
+- **FR-18.3** Rediseño oscuro con CustomTkinter: menú lateral con sección activa y contadores, tarjetas, píldoras de estado, estados vacíos y de error. Tokens inspirados en el DESIGN.md de Linear (un solo acento, grises fríos, contraste AAA en texto y botones).
+- **Criterio de aceptación:** prueba que reproduce el fallo de Instagram pasa; capturas reales de las 4 secciones revisadas (contraste, alineación, estados); flujo de reintento probado sin publicar.
