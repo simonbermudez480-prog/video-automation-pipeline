@@ -351,7 +351,8 @@ class BufferPublisher:
         video_url: str,
         bundle: SocialBundle,
         share_mode: str = "shareNow",
-        privacy: str = "public"
+        privacy: str = "public",
+        ai_generated: bool = False,
     ) -> Dict[str, any]:
         """Publica el video en YouTube Shorts con metadatos optimizados."""
         logger.info("Buffer: Enviando video a YouTube Shorts...")
@@ -379,7 +380,8 @@ class BufferPublisher:
                     "youtube": {
                         "title": yt.title,
                         "privacy": valid_privacy,
-                        "categoryId": "27"  # Educación
+                        "categoryId": "27",  # Educación
+                        "isAiGenerated": ai_generated,
                     }
                 }
             }
@@ -393,7 +395,8 @@ class BufferPublisher:
         channel_id: str,
         video_url: str,
         bundle: SocialBundle,
-        share_mode: str = "shareNow"
+        share_mode: str = "shareNow",
+        ai_generated: bool = False,
     ) -> Dict[str, any]:
         """Publica el video en Instagram Reels con caption completo y hashtags."""
         logger.info("Buffer: Enviando video a Instagram Reels...")
@@ -416,6 +419,7 @@ class BufferPublisher:
                     "instagram": {
                         "shouldShareToFeed": True,
                         "type": "reel",
+                        "isAiGenerated": ai_generated,
                         # Instagram es la única de las 3 redes que acepta primer comentario por la API de Buffer
                         **({"firstComment": bundle.youtube_shorts.pinned_comment} if bundle.youtube_shorts.pinned_comment else {}),
                     }
@@ -437,7 +441,8 @@ class BufferPublisher:
         channel_id: str,
         video_url: str,
         bundle: SocialBundle,
-        share_mode: str = "shareNow"
+        share_mode: str = "shareNow",
+        ai_generated: bool = False,
     ) -> Dict[str, any]:
         """Publica el video en TikTok con copy corto y hashtags virales."""
         logger.info("Buffer: Enviando video a TikTok...")
@@ -458,7 +463,8 @@ class BufferPublisher:
                 "assets": [{"video": {"url": video_url}}],
                 "metadata": {
                     "tiktok": {
-                        "title": tk.hook
+                        "title": tk.hook,
+                        "isAiGenerated": ai_generated,
                     }
                 }
             }
@@ -474,6 +480,7 @@ class BufferPublisher:
         platforms: Optional[List[str]] = None,
         share_mode: Optional[str] = None,
         privacy: Optional[str] = None,
+        ai_generated: bool = False,
     ) -> Dict[str, any]:
         """
         Orquesta la subida pública del video y publica automáticamente en todas las
@@ -499,7 +506,8 @@ class BufferPublisher:
         if "youtube" in target_platforms:
             if "youtube" in channels:
                 yt_id = channels["youtube"]["id"]
-                res = self.publish_youtube(yt_id, video_url, bundle, share_mode=selected_mode, privacy=selected_privacy)
+                res = self.publish_youtube(yt_id, video_url, bundle, share_mode=selected_mode, privacy=selected_privacy,
+                                           ai_generated=ai_generated)
                 results["platforms"]["youtube"] = res
                 if res.get("status") == "success":
                     logger.success("Buffer -> YouTube Shorts publicado exitosamente! (Post ID: {})", res.get("post_id"))
@@ -513,7 +521,7 @@ class BufferPublisher:
         if "instagram" in target_platforms:
             if "instagram" in channels:
                 ig_id = channels["instagram"]["id"]
-                res = self.publish_instagram(ig_id, video_url, bundle, share_mode=selected_mode)
+                res = self.publish_instagram(ig_id, video_url, bundle, share_mode=selected_mode, ai_generated=ai_generated)
                 results["platforms"]["instagram"] = res
                 if res.get("status") == "success":
                     logger.success("Buffer -> Instagram Reels publicado exitosamente! (Post ID: {})", res.get("post_id"))
@@ -527,7 +535,7 @@ class BufferPublisher:
         if "tiktok" in target_platforms:
             if "tiktok" in channels:
                 tk_id = channels["tiktok"]["id"]
-                res = self.publish_tiktok(tk_id, video_url, bundle, share_mode=selected_mode)
+                res = self.publish_tiktok(tk_id, video_url, bundle, share_mode=selected_mode, ai_generated=ai_generated)
                 results["platforms"]["tiktok"] = res
                 if res.get("status") == "success":
                     logger.success("Buffer -> TikTok publicado exitosamente! (Post ID: {})", res.get("post_id"))

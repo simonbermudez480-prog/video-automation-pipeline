@@ -176,6 +176,51 @@ class MajorityVoteTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class CreditsAndModelsTests(unittest.TestCase):
+    def test_credits_cite_only_images_in_the_video_that_require_it(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            quality_gate.save_manifest(tmp, {"scenes": {
+                "1": {"source": "wikimedia_scene", "credit": {"author": "Bernard Gagnon", "license": "CC BY-SA 4.0", "attribution_required": True}},
+                "2": {"source": "wikimedia_topic", "credit": {"author": "Uncredited author; unknown", "license": "CC BY 2.0", "attribution_required": True}},
+                "3": {"source": "pexels", "credit": {"author": "Ana", "license": "Pexels License", "attribution_required": False}},
+                "4": {"source": "pollinations", "credit": {"author": "Pollinations", "license": "Generada por IA", "attribution_required": False}},
+                "5": {"source": "openverse", "credit": {"author": "Bernard Gagnon", "license": "CC BY-SA 4.0", "attribution_required": True}},
+            }})
+            text, uses_ai = quality_gate.media_credits(tmp)
+            self.assertEqual(text, "Imágenes: Bernard Gagnon (CC BY-SA 4.0), autor desconocido (CC BY 2.0), vía Wikimedia Commons y Openverse.")
+            self.assertTrue(uses_ai)
+            text, uses_ai = quality_gate.media_credits(tmp, merged={2, 4})
+            self.assertNotIn("CC BY 2.0", text)
+            self.assertFalse(uses_ai, "la escena de IA fusionada no sale en el video")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_ai_flag_reaches_every_buffer_post(self):
+        publisher = BufferPublisher(token="prueba")
+        bundle = SimpleNamespace(
+            youtube_shorts=SimpleNamespace(title="T", description="D", tags=["historia"], pinned_comment=""),
+            instagram_reels=SimpleNamespace(caption="C", hashtags=[], hook_line="G"),
+            tiktok=SimpleNamespace(caption="C", hashtags=[], hook="G"),
+        )
+        sent = []
+        with mock.patch.object(publisher, "_execute_create_post", side_effect=lambda v: sent.append(v) or {"status": "success"}), \
+                mock.patch.object(publisher, "get_channels", return_value={p: {"id": p} for p in ("youtube", "instagram", "tiktok")}), \
+                mock.patch("src.buffer_publisher.upload_video_to_public_host", return_value="https://v.mp4"):
+            publisher.publish_all_platforms(Path("v.mp4"), bundle, ai_generated=True)
+        flags = [next(iter(v["input"]["metadata"].values()))["isAiGenerated"] for v in sent]
+        self.assertEqual(flags, [True, True, True])
+
+    def test_model_discovery_drops_missing_and_adds_new_models(self):
+        from src.config import TEXT_MODEL_PATTERN, TTS_MODEL_PATTERN, with_discovered_models
+        available = ["gemini-3.8-flash", "gemini-3.9-flash", "gemini-3.9-flash-lite", "gemini-2.5-pro",
+                     "gemini-3.9-flash-tts", "gemini-3.1-flash-image", "gemini-flash-lite-latest"]
+        text = with_discovered_models(["gemini-3.8-flash", "gemini-3.7-flash"], TEXT_MODEL_PATTERN, available)
+        self.assertEqual(text, ["gemini-3.8-flash", "gemini-3.9-flash", "gemini-3.9-flash-lite", "gemini-flash-lite-latest"])
+        self.assertEqual(with_discovered_models(["gemini-3.8-flash-tts"], TTS_MODEL_PATTERN, available), ["gemini-3.9-flash-tts"])
+        self.assertEqual(with_discovered_models(["a"], TEXT_MODEL_PATTERN, None), ["a"], "sin red se usa la lista configurada")
+
+
 class InstagramRetryTests(unittest.TestCase):
     def bundle(self):
         return SimpleNamespace(

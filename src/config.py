@@ -3,6 +3,7 @@ Configuración centralizada del pipeline de automatización multimedia.
 Carga variables de entorno desde .env y valida rutas y parámetros del sistema.
 """
 import os
+import re
 from pathlib import Path
 from typing import Literal
 from dotenv import load_dotenv
@@ -29,6 +30,41 @@ LOGS_DIR = ROOT_DIR / "logs"
 # Asegurar existencia de directorios operativos
 for directory in [ASSETS_DIR, JOBS_DIR, IMAGES_DIR, AUDIO_DIR, SUBTITLES_DIR, TEMP_DIR, OUTPUT_DIR, SOCIAL_PACKAGES_DIR, LOGS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
+
+
+# Descubrimiento de modelos de Gemini (FR-19.11): una consulta por proceso a la lista de modelos de la API
+TEXT_MODEL_PATTERN = re.compile(r"^gemini-(\d+(\.\d+)?-)?flash(-lite)?(-preview|-latest)?$")
+TTS_MODEL_PATTERN = re.compile(r"^gemini-\d+(\.\d+)?-flash(-lite)?(-preview)?-tts(-preview)?$")
+_AVAILABLE_MODELS: list = []
+
+
+def available_gemini_models() -> list[str] | None:
+    """Modelos con generateContent que ofrece la API, o None si no se pudieron listar (sin clave o sin red)."""
+    if not _AVAILABLE_MODELS:
+        try:
+            from google import genai
+
+            client = genai.Client(api_key=os.getenv("GEMINI_API_KEY", ""))
+            _AVAILABLE_MODELS.append([m.name.removeprefix("models/") for m in client.models.list()
+                                      if "generateContent" in (m.supported_actions or [])])
+        except Exception:
+            _AVAILABLE_MODELS.append(None)
+    return _AVAILABLE_MODELS[0]
+
+
+def _model_rank(name: str) -> tuple:
+    """Más reciente primero, flash antes que flash-lite, versiones fijas antes que alias y previews."""
+    version = re.search(r"-(\d+(?:\.\d+)?)-", name)
+    return ("lite" in name, -float(version.group(1)) if version else 0.0, "preview" in name, name)
+
+
+def with_discovered_models(configured: list[str], pattern: re.Pattern, available: list[str] | None) -> list[str]:
+    """Quita de la cascada los modelos que ya no existen y añade al final los nuevos que encajan con el patrón."""
+    if not available:
+        return configured
+    kept = [m for m in configured if m in available]
+    extra = sorted((m for m in available if pattern.match(m) and m not in kept), key=_model_rank)
+    return kept + extra
 
 
 class Settings:
@@ -62,7 +98,6 @@ class Settings:
         "gemini-3.5-flash-lite",
         "gemini-2.5-flash-lite",
     ]
-    ALLOW_HEURISTIC_SCRIPTS: bool = os.getenv("ALLOW_HEURISTIC_SCRIPTS", "false").lower() == "true"
 
     def get_gemini_model_candidates(self) -> list[str]:
         """
@@ -81,7 +116,7 @@ class Settings:
         for m in candidates:
             if m not in ordered:
                 ordered.append(m)
-        return ordered
+        return ordered if env_cascade else with_discovered_models(ordered, TEXT_MODEL_PATTERN, available_gemini_models())
 
 
     # --- TTS / Síntesis de Voz ---
@@ -113,7 +148,7 @@ class Settings:
         for m in candidates:
             if m not in ordered:
                 ordered.append(m)
-        return ordered
+        return ordered if env_cascade else with_discovered_models(ordered, TTS_MODEL_PATTERN, available_gemini_models())
 
 
     # --- Audio Alignment & Whisper ---

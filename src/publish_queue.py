@@ -144,9 +144,9 @@ def process_queue(publish: Callable[[dict, Path], None], require_approval: bool 
             closing_question=script.closing_question,
             opening_image=choose_opening_image(image_paths, load_manifest(images_dir), gate.merges),
         )
+        entry["merged_scenes"] = {str(k): v for k, v in sorted(gate.merges.items())}
         publish(entry, video_path)
         entry["status"] = "published"
-        entry["merged_scenes"] = {str(k): v for k, v in sorted(gate.merges.items())}
         _move(qfile, entry, "done")
         counts["published"] += 1
 

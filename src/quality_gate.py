@@ -347,6 +347,31 @@ Verdict = tuple[bool, str, list[str], int]
 _JUDGMENT_ISSUES = {"ANACHRONISM", "ABSURD_DISSONANCE"}
 
 
+def media_credits(images_dir: Path, merged: set[int] = frozenset()) -> tuple[str, bool]:
+    """
+    Créditos de las imágenes que salen en el video (FR-19.10) y si alguna es de IA.
+    Solo se citan las que exigen atribución (CC BY, CC BY-SA...); las escenas fusionadas no aparecen en el video.
+    Retorna ("Imágenes: Autor (CC BY-SA 4.0), ... vía Wikimedia Commons/Openverse", usa_ia).
+    """
+    seen: list[str] = []
+    uses_ai = False
+    for idx, entry in sorted(load_manifest(images_dir).get("scenes", {}).items(), key=lambda kv: int(kv[0])):
+        if int(idx) in merged:
+            continue
+        uses_ai = uses_ai or SOURCE_KINDS.get(entry.get("source") or "") == "ai"
+        credit = entry.get("credit") or {}
+        if not credit.get("attribution_required"):
+            continue
+        author = re.split(r"[;\n]|\. ", str(credit.get("author") or ""))[0].strip()
+        if not author or len(author) > 40 or author.lower().startswith(("unknown", "uncredited", "anonymous", "desconocido")):
+            author = "autor desconocido"
+        label = f"{author} ({credit.get('license')})"
+        if label not in seen:
+            seen.append(label)
+    text = f"Imágenes: {', '.join(seen)}, vía Wikimedia Commons y Openverse." if seen else ""
+    return text, uses_ai
+
+
 def is_doubtful(verdict: Verdict, source_kind: str) -> bool:
     """
     Veredicto dudoso (FR-19.9): aprobada pese a señalar algún problema, o foto de archivo rechazada solo por

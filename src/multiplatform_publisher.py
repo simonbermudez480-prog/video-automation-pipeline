@@ -262,6 +262,7 @@ class MultiPlatformPublisher:
         platforms: Optional[List[str]] = None,
         create_package: bool = True,
         privacy: Optional[str] = None,
+        ai_generated: bool = False,
     ) -> Dict[str, any]:
         """
         Orquesta la publicación simultánea en todas las plataformas solicitadas.
@@ -299,6 +300,7 @@ class MultiPlatformPublisher:
                     bundle=bundle,
                     platforms=chosen,
                     privacy=privacy,
+                    ai_generated=ai_generated,
                 )
                 results["buffer"] = buf_res
                 for plat, status_data in buf_res.get("platforms", {}).items():
@@ -341,6 +343,7 @@ def publish_video_multiplatform(
     platforms: Optional[List[str]] = None,
     create_package: bool = True,
     privacy: Optional[str] = None,
+    ai_generated: bool = False,
 ) -> Dict[str, any]:
     """Función de conveniencia para invocar el publicador multi-plataforma."""
     publisher = MultiPlatformPublisher()

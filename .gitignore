@@ -25,13 +25,18 @@ assets/temp/
 *.jpeg
 *.png
 !screenshots/*.png
-!assets/images/*.png
 
 # Salidas de video finales y logs
 output/*.mp4
 output/*.mkv
 output/social_packages/
 assets/jobs/
+# Copia de trabajo del último video (se regenera en cada producción, FR-19.13)
+assets/images/
+assets/audio/
+assets/subtitles/
+assets/script.json
+assets/aligned_scenes.json
 logs/
 *.log
 
