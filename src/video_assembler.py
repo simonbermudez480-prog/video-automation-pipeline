@@ -439,4 +439,18 @@ def assemble_video(
 
     file_size_mb = final_output.stat().st_size / (1024 * 1024)
     logger.success("Video final producido exitosamente: {} ({:.2f} MB)", final_output, file_size_mb)
+    _remove_render_temps(working_temp_dir)
     return final_output
+
+
+def _remove_render_temps(temp_dir: Path) -> None:
+    """Borra los clips intermedios (~800 MB por video, FR-19.1); un nuevo montaje los vuelve a generar."""
+    freed = 0
+    for item in [*temp_dir.glob("clip_*.mp4"), temp_dir / "overlay_texts.ass"]:
+        try:
+            if item.exists():
+                freed += item.stat().st_size
+                item.unlink()
+        except OSError as e:
+            logger.warning("No se pudo borrar el temporal {}: {}", item.name, e)
+    logger.info("Temporales de montaje borrados ({:.0f} MB liberados).", freed / 1024 ** 2)

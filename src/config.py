@@ -17,13 +17,17 @@ ASSETS_DIR = ROOT_DIR / "assets"
 IMAGES_DIR = ASSETS_DIR / "images"
 AUDIO_DIR = ASSETS_DIR / "audio"
 SUBTITLES_DIR = ASSETS_DIR / "subtitles"
-TEMP_DIR = ASSETS_DIR / "temp"
-OUTPUT_DIR = ROOT_DIR / "output"
+# Carpeta de trabajo pesada (FR-19.2): con WORK_DIR en .env, trabajos, temporales y videos viven fuera
+# de la carpeta del programa (p. ej. fuera de OneDrive); sin ella se mantiene la estructura de siempre.
+WORK_DIR = Path(os.path.expandvars(os.getenv("WORK_DIR", "").strip())).expanduser() if os.getenv("WORK_DIR", "").strip() else None
+JOBS_DIR = WORK_DIR / "jobs" if WORK_DIR else ASSETS_DIR / "jobs"
+TEMP_DIR = WORK_DIR / "temp" if WORK_DIR else ASSETS_DIR / "temp"
+OUTPUT_DIR = WORK_DIR / "output" if WORK_DIR else ROOT_DIR / "output"
 SOCIAL_PACKAGES_DIR = OUTPUT_DIR / "social_packages"
 LOGS_DIR = ROOT_DIR / "logs"
 
 # Asegurar existencia de directorios operativos
-for directory in [ASSETS_DIR, IMAGES_DIR, AUDIO_DIR, SUBTITLES_DIR, TEMP_DIR, OUTPUT_DIR, SOCIAL_PACKAGES_DIR, LOGS_DIR]:
+for directory in [ASSETS_DIR, JOBS_DIR, IMAGES_DIR, AUDIO_DIR, SUBTITLES_DIR, TEMP_DIR, OUTPUT_DIR, SOCIAL_PACKAGES_DIR, LOGS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -34,6 +38,8 @@ class Settings:
     IMAGES_DIR = IMAGES_DIR
     AUDIO_DIR = AUDIO_DIR
     SUBTITLES_DIR = SUBTITLES_DIR
+    WORK_DIR = WORK_DIR
+    JOBS_DIR = JOBS_DIR
     TEMP_DIR = TEMP_DIR
     OUTPUT_DIR = OUTPUT_DIR
     SOCIAL_PACKAGES_DIR = SOCIAL_PACKAGES_DIR

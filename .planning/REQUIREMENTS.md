@@ -153,3 +153,21 @@
 - **FR-18.2** El historial distingue "Publicado", "Publicado con errores" y "Error al publicar", muestra el motivo de cada error y permite reintentar solo la plataforma que falló.
 - **FR-18.3** Rediseño oscuro con CustomTkinter: menú lateral con sección activa y contadores, tarjetas, píldoras de estado, estados vacíos y de error. Tokens inspirados en el DESIGN.md de Linear (un solo acento, grises fríos, contraste AAA en texto y botones).
 - **Criterio de aceptación:** prueba que reproduce el fallo de Instagram pasa; capturas reales de las 4 secciones revisadas (contraste, alineación, estados); flujo de reintento probado sin publicar.
+
+### FR-19: Mejoras de calidad del pipeline tras la auditoría (Fase 22)
+**Contexto (auditoría 2026-10-18, solo lectura):** se publicaron videos que no superaron el control (Guam 6/13 imágenes aprobadas, Karánsebes 10/13); cada trabajo deja ~800 MB de clips temporales; el proyecto vive dentro de OneDrive (sincroniza temporales y bloquea archivos); temas con restos de listas ("3. El espía…", ". La batalla…"); 13–36 min por video; sin pruebas automáticas; 56 `except Exception`; ~700 líneas de guiones de contingencia sin uso; repo `video-assets` en 525 MB con 44 videos; 17 commits sin pasar a `main`; dependencias sin versión fija.
+
+- **FR-19.1 Disco:** la carpeta `temp` de cada trabajo se borra al terminar bien el video (se conservan imágenes, audio, guion, subtítulos y reportes).
+- **FR-19.2 Fuera de OneDrive:** `assets/jobs` y `output` pueden vivir en una carpeta fuera de OneDrive configurable en `.env` (`WORK_DIR`), con migración de lo existente y el instalador/diagnóstico al tanto.
+- **FR-19.3 Reparar escenas:** desde la interfaz, un video que no superó el control puede regenerar solo las escenas rechazadas (continuando la búsqueda, con IA si hay clave) y volver a montarse; publicar con menos del 80 % de imágenes aprobadas pide una confirmación reforzada.
+- **FR-19.4 Tema limpio:** se quitan numeraciones y puntuación inicial ("3.", "- ", ". ") del tema antes de generar el guion y el nombre del archivo.
+- **FR-19.5 Pruebas automáticas sin internet:** control de calidad y fusiones, duración del audio en el montaje, reintento de Instagram, fusión de `publication.json`, temas con comas y limpieza de temas. Se ejecutan con un solo comando.
+- **FR-19.6 Errores visibles:** los fallos de redacción de textos, subida o publicación llegan a la interfaz con un motivo claro en vez de quedar ocultos en el registro.
+- **FR-19.7 Tiempos por paso:** el reporte de cada trabajo guarda la duración de cada paso; con esos datos se reducen rondas y esperas inútiles.
+- **FR-19.8 Experimento de duración:** 3 videos de ~60 s frente a 3 de ~2,5 min, comparando en TikTok Studio el segundo de abandono, el tiempo medio y el porcentaje que termina (enlaza con la tarea 20.6).
+- **FR-19.9 Revisor estable:** voto por mayoría (2–3 opiniones) solo para imágenes dudosas.
+- **FR-19.10 Licencias y etiqueta IA:** créditos automáticos de imágenes con licencia que exige atribución (16.5b) y decisión sobre `isAiGenerated`.
+- **FR-19.11 Descubrimiento de modelos** de guion y voz igual que el de visión.
+- **FR-19.12 Alojamiento sostenible:** política para `video-assets` (limpieza o adjuntos de *releases*) antes de que GitHub avise por tamaño.
+- **FR-19.13 Mantenimiento:** pasar la rama a `main` y subirla (sin claves), fijar versiones en `requirements.txt`, sacar de git los archivos de trabajo de `assets/` y eliminar los guiones de contingencia sin uso.
+- **Criterio de aceptación:** cada tarea se verifica con su prueba o con capturas; tras FR-19.1/19.2 el disco no crece con temporales entre videos; ningún video con el control fallido se publica sin la confirmación reforzada.

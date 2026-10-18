@@ -165,3 +165,23 @@
   - [x] 21.4 Verificado (2026-10-18): capturas reales `screenshots/fase21_create.png`, `fase21_review.png`, `fase21_history.png` (con aviso de error y "Reintentar en Instagram") y `fase21_status.png` revisadas; contraste comprobado (texto 15,7:1, secundario 7,7:1, botón principal 7,0:1). Reintento probado sin publicar: genera `--publish-job <carpeta> --publish-platforms instagram`.
     - Corregido en la verificación: píldora de estado cortada y títulos recortados en el historial (columnas fijas en cuadrícula), emojis de los títulos que Tk mostraba como cuadros, barra de disco que mostraba el espacio usado en azul con texto "Suficiente", hoja de contacto recortada o demasiado pequeña.
     - Solo tema oscuro (decisión del usuario). Requiere `customtkinter` (añadido a requirements.txt; el instalador lo instala). Pendiente: volver a publicar en Instagram los 5 videos afectados, con confirmación del usuario.
+
+- [ ] **Phase 22: Mejoras de calidad tras la auditoría** (Requisitos: FR-19) — *auditoría 2026-10-18; orden por impacto*
+  - **Bloque 1 · Disco** (poco esfuerzo, evita que el disco se llene)
+    - [x] 22.1 Borrar `temp` de cada trabajo al terminar bien (FR-19.1). *Hecho 2026-10-18: `assemble_video` borra `clip_*.mp4` y el `.ass` al terminar (738 MB por video); verificado re-montando Reckless.*
+    - [x] 22.2 Carpeta de trabajo fuera de OneDrive (`WORK_DIR`) con migración (FR-19.2). *Hecho 2026-10-18: `WORK_DIR` en `.env` → `jobs/`, `temp/`, `output/`; `mover_carpeta_trabajo.py` movió 28 trabajos y `output` a `C:\Users\simon\VideosEducativos_trabajo`, corrigió 51 JSON y liberó 2,37 GB (incluye el clon viejo del CDN); aviso en el diagnóstico de la interfaz.*
+  - **Bloque 2 · Lo que se publica**
+    - [ ] 22.3 "Reparar escenas" y confirmación reforzada con <80 % aprobadas (FR-19.3).
+    - [ ] 22.4 Limpieza del tema de entrada (FR-19.4).
+  - **Bloque 3 · Red de seguridad**
+    - [ ] 22.5 Pruebas automáticas sin internet (FR-19.5).
+    - [ ] 22.6 Errores visibles en la interfaz (FR-19.6).
+  - **Bloque 4 · Decisiones con datos**
+    - [ ] 22.7 Tiempos por paso en el reporte (FR-19.7).
+    - [ ] 22.8 Experimento de duración 60 s vs 2,5 min (FR-19.8, con 20.6).
+    - [ ] 22.9 Voto por mayoría en imágenes dudosas (FR-19.9).
+  - **Bloque 5 · Mantenimiento**
+    - [ ] 22.10 Créditos de licencias y decisión `isAiGenerated` (FR-19.10).
+    - [ ] 22.11 Descubrimiento de modelos de guion y voz (FR-19.11).
+    - [ ] 22.12 Política de alojamiento de `video-assets` (FR-19.12).
+    - [ ] 22.13 Pasar a `main`, fijar versiones, sacar `assets/` de git, quitar código muerto (FR-19.13).

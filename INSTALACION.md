@@ -31,6 +31,8 @@ Guía para instalar el programa en una PC con Windows 10 u 11, sin usar comandos
 3. **Historial:** enlaces de lo publicado (doble clic para abrir).
 4. **Cola y estado:** espacio en disco, saldo de imágenes y estado de las claves.
 
+Si la carpeta del programa está dentro de OneDrive, ejecuta una vez `python mover_carpeta_trabajo.py`: guarda los videos y trabajos en `%USERPROFILE%\VideosEducativos_trabajo` para no llenar OneDrive.
+
 ## Seguridad de las claves
 
 - El archivo `.env` dentro de la carpeta contiene las claves de Gemini, Buffer, Pollinations, Pexels y GitHub. **Con él se puede publicar en las 3 cuentas.** No lo compartas ni lo subas a internet.

@@ -1,8 +1,8 @@
 # Current Project State
 
 ## Status
-- **Current Phase:** Phase 15 (Pre-Publish Quality Gate) — Complete (sin commit). Phase 16 (Free Hybrid Visual Pipeline) — siguiente.
-- **Active Task:** Fase 21 terminada y verificada (sin commit). 5 videos sin Instagram por el primer comentario (plan gratuito de Buffer): Oreja de Jenkins, Karánsebes, Tres Reyes, Guam, Sargento Reckless; se pueden reintentar desde Historial. Fase 20.6 (medición) sigue pendiente.
+- **Current Phase:** Phases 15–21 completas y commiteadas (salvo 20.6). Phase 22 (Mejoras de calidad tras la auditoría) — registrada, siguiente.
+- **Active Task:** Fase 22 — Bloque 1 hecho sin commit (22.1 limpieza de temporales; 22.2 `WORK_DIR=C:\Users\simon\VideosEducativos_trabajo`, en otra PC vacío = estructura de siempre). Siguiente: Bloque 2 (22.3 "Reparar escenas", 22.4 limpieza del tema). Fase 21 commiteada (c8f28c2); quedan 5 videos por re-publicar en Instagram desde Historial (lo hace el usuario).
 - **Fase 15 — resultado clave:** con el control activo, las fuentes gratuitas actuales (Pexels/Wikimedia con búsqueda simple) solo consiguen 4/13 imágenes válidas para el Emú (1932): casi todo el stock es moderno. El bloqueo funciona; lo que falta es mejor búsqueda de archivo (Fase 16). Nuevo módulo `src/quality_gate.py`; publicar ahora pide confirmación humana por defecto (`--no-approval` para automatizar) y deja `quality_report.json` en la carpeta del job y la hoja de contacto en `output/review/`.
 - **Riesgo:** la cuota gratuita de visión por modelo es pequeña (2 modelos se agotaron en 4 llamadas el 2026-10-15). Si se agota, las escenas quedan `unaudited` y la publicación se bloquea.
 - **Next Actions:**

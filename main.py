@@ -31,7 +31,7 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-from src.config import settings, ROOT_DIR, ASSETS_DIR, IMAGES_DIR, AUDIO_DIR, SUBTITLES_DIR, TEMP_DIR, OUTPUT_DIR
+from src.config import settings, ROOT_DIR, ASSETS_DIR, IMAGES_DIR, AUDIO_DIR, SUBTITLES_DIR, TEMP_DIR, OUTPUT_DIR, JOBS_DIR
 from src.logger import logger
 from src.script_generator import generate_script, save_script_to_disk, ScriptOutput
 from src.voice_synthesizer import synthesize_voice
@@ -62,9 +62,8 @@ def clean_temp_workspace(clean_images: bool = True, clean_audio: bool = False, c
     if clean_audio:
         dirs_to_clean.extend([AUDIO_DIR, SUBTITLES_DIR])
     if clean_jobs:
-        jobs_dir = ASSETS_DIR / "jobs"
-        if jobs_dir.exists():
-            dirs_to_clean.append(jobs_dir)
+        if JOBS_DIR.exists():
+            dirs_to_clean.append(JOBS_DIR)
 
     for target_dir in dirs_to_clean:
         if target_dir.exists():
@@ -245,8 +244,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Carpeta aislada para assets de este trabajo
-    jobs_root = ASSETS_DIR / "jobs"
-    job_dir = jobs_root / f"{slug}_{ratio_tag}_{timestamp}"
+    job_dir = JOBS_DIR / f"{slug}_{ratio_tag}_{timestamp}"
     job_audio_dir = job_dir / "audio"
     job_subtitles_dir = job_dir / "subtitles"
     job_images_dir = job_dir / "images"
@@ -716,7 +714,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         metavar="CARPETA",
-        help="Publicar un video ya producido a partir de su carpeta de trabajo (assets/jobs/...), usado por la interfaz",
+        help="Publicar un video ya producido a partir de su carpeta de trabajo (jobs/...), usado por la interfaz",
     )
     parser.add_argument(
         "--no-approval",

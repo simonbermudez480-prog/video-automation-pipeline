@@ -21,8 +21,10 @@ import customtkinter as ctk
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
-JOBS_DIR = ROOT / "assets" / "jobs"
-QUEUE_DIR = ROOT / "output" / "queue"
+sys.path.insert(0, str(ROOT))
+from src.config import JOBS_DIR, OUTPUT_DIR, WORK_DIR  # noqa: E402  (respeta WORK_DIR del .env)
+
+QUEUE_DIR = OUTPUT_DIR / "queue"
 PLATFORMS = ("youtube", "instagram", "tiktok")
 PLATFORM_NAMES = {"youtube": "YouTube", "instagram": "Instagram", "tiktok": "TikTok"}
 STEPS = ["Guion", "Voz", "Subtítulos", "Imágenes", "Montaje", "Listo"]
@@ -81,7 +83,7 @@ def publication_status(publication: dict) -> str:
 
 
 def load_jobs() -> list[dict]:
-    """Trabajos producidos (carpetas de assets/jobs con reporte de calidad o publicación), del más nuevo al más viejo."""
+    """Trabajos producidos (carpetas de jobs con reporte de calidad o publicación), del más nuevo al más viejo."""
     jobs = []
     for d in JOBS_DIR.glob("*/"):
         report = _read_json(d / "quality_report.json")
@@ -130,15 +132,17 @@ def run_diagnostics() -> list[tuple[str, bool, bool, str]]:
         ("Clave de Pollinations (imágenes con IA)", has("POLLINATIONS_API_KEY") or has("IMAGE_API_KEY"), False,
          "Opcional: sin ella no se generan imágenes con IA para los huecos."),
         ("Clave de Pexels (fotos de stock)", has("PEXELS_API_KEY"), False, "Opcional: sin ella no se usan fotos de stock."),
+        ("Videos guardados fuera de OneDrive", "onedrive" not in str(WORK_DIR or ROOT).lower(), False,
+         "Recomendado: ejecuta 'python mover_carpeta_trabajo.py' para no llenar OneDrive."),
     ]
 
 
 def free_disk_gb() -> float:
-    return shutil.disk_usage(ROOT).free / 1024 ** 3
+    return shutil.disk_usage(WORK_DIR or ROOT).free / 1024 ** 3
 
 
 def disk_usage_ratio() -> float:
-    usage = shutil.disk_usage(ROOT)
+    usage = shutil.disk_usage(WORK_DIR or ROOT)
     return usage.used / usage.total
 
 
