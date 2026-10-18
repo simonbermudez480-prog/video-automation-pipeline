@@ -312,6 +312,14 @@ def publish_queued(entry: dict, video_path: Path) -> None:
 def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: int, total_jobs: int) -> Path:
     """Ejecuta el ciclo de vida completo de creación para un video individual en su propio entorno aislado."""
     start_time = time.time()
+    # Segundos por paso (FR-19.7): se guardan en quality_report.json para ver dónde se va el tiempo
+    timings: dict[str, float] = {}
+    step_start = [start_time]
+
+    def mark(step: str) -> None:
+        now = time.time()
+        timings[step] = round(now - step_start[0], 1)
+        step_start[0] = now
     aspect_ratio = args.aspect_ratio or settings.DEFAULT_ASPECT_RATIO
     ratio_tag = "9x16" if aspect_ratio == "9:16" else "16x9"
     slug = slugify(topic)
@@ -378,6 +386,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
     logger.info("Título: {}", script_data.metadata.title)
     logger.info("Número de escenas definidas: {}", len(script_data.scenes))
 
+    mark("guion")
     # -------------------------------------------------------------
     # PASO 2: Síntesis de Voz (TTS)
     # -------------------------------------------------------------
@@ -400,6 +409,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
         if not narration_audio.exists():
             raise FileNotFoundError(f"No se encontró audio de narración en: {narration_audio}")
 
+    mark("voz")
     # -------------------------------------------------------------
     # PASO 3: Detección de Pausas, Timestamps y Subtítulos Ground-Truth
     # -------------------------------------------------------------
@@ -421,6 +431,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
         logger.info("\n>>> [{}/{}] [PASO 3/6] Omitido: Usando subtítulos existentes.")
         subtitles_file = settings.SUBTITLES_SRT_PATH
 
+    mark("subtitulos")
     # -------------------------------------------------------------
     # PASO 4: Generación de Imágenes Coherentes (9:16 o 16:9)
     # -------------------------------------------------------------
@@ -448,6 +459,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
                 raise FileNotFoundError(f"Falta la imagen requerida: {p}")
             image_paths.append(p)
 
+    mark("imagenes")
     # Control de calidad visual (FR-12 / FR-14.6): decide qué escenas se fusionan antes del montaje
     contact_sheet = OUTPUT_DIR / "review" / f"{target_video_path.stem}_contact.png"
     gate = run_quality_gate(image_paths, contact_sheet) if image_paths else None
@@ -474,6 +486,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
     # Apertura con la imagen de mayor impacto si supera claramente a la escena 1 (FR-17.2)
     opening_image = choose_opening_image(image_paths, load_manifest(image_paths[0].parent), gate.merges) if gate else None
 
+    mark("control_calidad")
     # -------------------------------------------------------------
     # PASO 5: Montaje Audiovisual con Efecto Dinámico (FFmpeg)
     # -------------------------------------------------------------
@@ -502,6 +515,7 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
     else:
         logger.info("\n>>> [{}/{}] [PASO 5/6] Omitido: Montaje de video saltado por usuario.")
 
+    mark("montaje")
     # -------------------------------------------------------------
     # PASO 6: Copys con IA y Publicación Multi-Plataforma (Shorts, Reels, TikTok)
     # -------------------------------------------------------------
@@ -588,7 +602,14 @@ def execute_single_video_job(topic: str, args: argparse.Namespace, job_index: in
             total_jobs,
         )
 
+    mark("publicacion")
     job_elapsed = time.time() - start_time
+    report_path = job_dir / "quality_report.json"
+    if report_path.exists():
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report["timings"] = {**timings, "total": round(job_elapsed, 1)}
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info("Tiempos por paso (s): {}", ", ".join(f"{k}={v}" for k, v in timings.items()))
     file_size_mb = final_video.stat().st_size / (1024 * 1024) if final_video.exists() else 0.0
     logger.success(
         "VIDEO [{}/{}] FINALIZADO CON ÉXITO EN {:.2f}s | Salida: {} ({:.2f} MB)",

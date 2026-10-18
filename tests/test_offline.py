@@ -24,6 +24,7 @@ from PIL import Image  # noqa: E402
 
 import main  # noqa: E402
 from src.buffer_publisher import BufferPublisher  # noqa: E402
+from src import quality_gate  # noqa: E402
 from src.quality_gate import evaluate_gate  # noqa: E402
 from src.script_generator import Scene  # noqa: E402
 from src.video_assembler import apply_scene_merges, assemble_video  # noqa: E402
@@ -123,6 +124,56 @@ class GateTests(unittest.TestCase):
         self.assertEqual(kept[0].end_time, 7.0)
         self.assertEqual(paths, [self.images[0], self.images[2]])
         self.assertAlmostEqual(sum(s.duration for s in kept), 12.0)
+
+
+class MajorityVoteTests(unittest.TestCase):
+    ITEMS = [{"idx": 1, "source_kind": "archive"}, {"idx": 2, "source_kind": "stock"}, {"idx": 3, "source_kind": "archive"}]
+    OK, BAD = (True, "bien", [], 7), (False, "otra época", ["ANACHRONISM"], 3)
+
+    def run_vote(self, first, opinions):
+        """opinions: veredictos que devolverán la 2.ª y 3.ª llamada al revisor."""
+        calls = []
+
+        def fake_audit(items, era="", topic=""):
+            calls.append([it["idx"] for it in items])
+            return {it["idx"]: opinions[len(calls) - 1][it["idx"]] for it in items}
+
+        with mock.patch.object(quality_gate, "audit_images_batch", side_effect=fake_audit):
+            return quality_gate.vote_on_doubtful(self.ITEMS, first), calls
+
+    def test_clear_verdicts_spend_no_extra_calls(self):
+        first = {1: self.OK, 2: (False, "persona moderna", ["UNWANTED_HUMAN"], 2), 3: self.OK}
+        result, calls = self.run_vote(first, [])
+        self.assertEqual(result, first)
+        self.assertEqual(calls, [])
+
+    def test_archive_rejected_by_judgment_gets_majority(self):
+        first = {1: self.BAD, 2: self.OK, 3: self.OK}
+        result, calls = self.run_vote(first, [{1: self.OK}, {1: self.OK}])
+        self.assertTrue(result[1][0])
+        self.assertEqual(calls, [[1], [1]])
+
+    def test_second_opinion_agreeing_skips_third(self):
+        flagged = (True, "texto raro", ["WATERMARK_OR_TEXT"], 6)
+        result, calls = self.run_vote({1: self.OK, 2: flagged, 3: self.OK}, [{2: flagged}])
+        self.assertTrue(result[2][0])
+        self.assertEqual(calls, [[2]])
+
+    def test_tie_without_third_opinion_rejects(self):
+        flagged = (True, "texto raro", ["WATERMARK_OR_TEXT"], 6)
+        no_answer = mock.patch.object(quality_gate, "audit_images_batch", side_effect=[{2: (False, "x", ["WATERMARK_OR_TEXT"], 1)}, None])
+        with no_answer:
+            result = quality_gate.vote_on_doubtful(self.ITEMS, {1: self.OK, 2: flagged, 3: self.OK})
+        self.assertFalse(result[2][0])
+
+    def test_audit_thumbnail_is_sent_as_jpeg(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            part = quality_gate._jpeg_part(make_images(tmp, 1, size=(1080, 1920))[0])
+            self.assertEqual(part.inline_data.mime_type, "image/jpeg")
+            self.assertLess(len(part.inline_data.data), 1_500_000)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 class InstagramRetryTests(unittest.TestCase):

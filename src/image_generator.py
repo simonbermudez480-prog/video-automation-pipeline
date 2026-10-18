@@ -25,7 +25,7 @@ import requests
 
 from src.config import settings
 from src.logger import logger
-from src.quality_gate import SOURCE_KINDS, audit_images_batch, find_duplicates, load_manifest, save_manifest
+from src.quality_gate import SOURCE_KINDS, audit_images_batch, find_duplicates, load_manifest, save_manifest, vote_on_doubtful
 from src.script_generator import Scene
 
 # Encabezados estándar de navegador para evitar bloqueos
@@ -865,6 +865,8 @@ def generate_images_for_scenes(
                     for i in sorted(to_audit)
                 ]
                 verdicts = audit_images_batch(items, era=era, topic=topic_label)
+                if verdicts is not None:
+                    verdicts = vote_on_doubtful(items, verdicts, era=era, topic=topic_label)
                 if verdicts is None:
                     # Sin visión no se audita más, pero se siguen reemplazando duplicados
                     vision_down = True

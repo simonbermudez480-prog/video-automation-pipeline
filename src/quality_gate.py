@@ -6,6 +6,7 @@ Provee:
 3. Hoja de contacto para revisión humana.
 4. Veredicto de bloqueo de publicación (gate).
 """
+import io
 import json
 import os
 import re
@@ -278,6 +279,21 @@ def _call_vision(contents: list) -> Optional[dict]:
     return None
 
 
+def _jpeg_part(path: Path):
+    """
+    Miniatura en JPEG para la revisión visual. Si se pasa la imagen de PIL, el SDK la envía en PNG (~4 veces más
+    pesada) y con conexiones lentas la subida del lote agota el tiempo de espera (FR-19.7).
+    """
+    from google.genai import types
+
+    with Image.open(path) as im:
+        thumb = im.convert("RGB")
+    thumb.thumbnail(AUDIT_IMAGE_SIZE)
+    buf = io.BytesIO()
+    thumb.save(buf, "JPEG", quality=85)
+    return types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg")
+
+
 def audit_images_batch(items: list[dict], era: str = "", topic: str = "") -> Optional[dict[int, tuple[bool, str, list[str], int]]]:
     """
     Audita varias escenas con UNA llamada de visión por lote (máx. AUDIT_BATCH_SIZE imágenes).
@@ -296,10 +312,7 @@ def audit_images_batch(items: list[dict], era: str = "", topic: str = "") -> Opt
         batch = items[start:start + AUDIT_BATCH_SIZE]
         contents: list = [_build_batch_prompt(batch, era, topic)]
         for it in batch:
-            with Image.open(it["path"]) as im:
-                thumb = im.convert("RGB")
-                thumb.thumbnail(AUDIT_IMAGE_SIZE)
-            contents += [f"IMAGE {it['idx']}:", thumb]
+            contents += [f"IMAGE {it['idx']}:", _jpeg_part(it["path"])]
 
         logger.info("Auditoría visual por lote: {} imagen(es) en una sola llamada...", len(batch))
         data = _call_vision(contents)
@@ -328,6 +341,47 @@ def audit_images_batch(items: list[dict], era: str = "", topic: str = "") -> Opt
             log = logger.info if approved else logger.warning
             log("[QA Lote] Escena #{:03d} {}: {}", it["idx"], "APROBADA" if approved else f"RECHAZADA ({', '.join(issues)})", v.get("reason", ""))
     return results
+
+
+Verdict = tuple[bool, str, list[str], int]
+_JUDGMENT_ISSUES = {"ANACHRONISM", "ABSURD_DISSONANCE"}
+
+
+def is_doubtful(verdict: Verdict, source_kind: str) -> bool:
+    """
+    Veredicto dudoso (FR-19.9): aprobada pese a señalar algún problema, o foto de archivo rechazada solo por
+    criterios de juicio (época o relación con la narración), donde el revisor suele cambiar de opinión.
+    """
+    approved, _, issues, _ = verdict
+    if approved:
+        return bool(issues)
+    return source_kind == "archive" and bool(issues) and set(issues) <= _JUDGMENT_ISSUES
+
+
+def vote_on_doubtful(items: list[dict], verdicts: dict[int, Verdict], era: str = "", topic: str = "") -> dict[int, Verdict]:
+    """
+    Voto por mayoría solo para los veredictos dudosos: una segunda opinión y, si no coincide, una tercera.
+    Si falta la tercera con un empate, gana el rechazo (fail-closed). Las imágenes claras no gastan más cuota.
+    """
+    doubtful = [it for it in items if it["idx"] in verdicts and is_doubtful(verdicts[it["idx"]], it.get("source_kind") or "")]
+    if not doubtful:
+        return verdicts
+    logger.info("Segunda opinión para {} imagen(es) dudosa(s): {}", len(doubtful), ", ".join(f"#{it['idx']}" for it in doubtful))
+    second = audit_images_batch(doubtful, era=era, topic=topic) or {}
+    split = [it for it in doubtful if it["idx"] in second and second[it["idx"]][0] != verdicts[it["idx"]][0]]
+    third = (audit_images_batch(split, era=era, topic=topic) or {}) if split else {}
+
+    result = dict(verdicts)
+    for it in doubtful:
+        i = it["idx"]
+        votes = [v for v in (verdicts[i], second.get(i), third.get(i)) if v is not None]
+        approvals = sum(1 for v in votes if v[0])
+        winner = approvals * 2 > len(votes)
+        result[i] = next(v for v in votes if v[0] == winner)
+        if winner != verdicts[i][0]:
+            logger.info("Escena #{:03d}: la mayoría ({}/{}) cambia el veredicto a {}.", i, max(approvals, len(votes) - approvals),
+                        len(votes), "APROBADA" if winner else "RECHAZADA")
+    return result
 
 
 # ---------------------------------------------------------------------------
